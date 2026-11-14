@@ -304,7 +304,7 @@ final class MenuContentView: UIView {
 
     /// El dedo índice apunta; si se queda quieto sobre un tile, se abre.
     func updatePointer(atLocal point: CGPoint?, dt: CGFloat) {
-        guard let point, let tile = tile(at: point) else {
+        guard let point, let tile = tile(at: point, preferring: focusedTile) else {
             clearFocus()
             return
         }
@@ -356,7 +356,15 @@ final class MenuContentView: UIView {
     }
 
     /// Tile bajo el dedo, con margen y "imán" al más cercano para que no cueste acertar.
-    private func tile(at point: CGPoint) -> MenuTileView? {
+    /// Si ya hay uno enfocado, se mantiene mientras el dedo no salga (sticky).
+    private func tile(at point: CGPoint, preferring current: MenuTileView? = nil) -> MenuTileView? {
+        if let current,
+           let index = tiles.firstIndex(where: { $0 === current }),
+           index < cells.count,
+           cells[index].insetBy(dx: 3, dy: 2).contains(point) {
+            return current
+        }
+
         for (index, cell) in cells.enumerated() where index < tiles.count {
             if cell.insetBy(dx: -4, dy: -3).contains(point) { return tiles[index] }
         }

@@ -144,8 +144,10 @@ final class GestureEngine {
     private func begin(window: SpatialWindow, with hand: HandPose, host: WindowHostView) {
         let point = dragPoint(hand)
 
-        // Si es el menú y la pinza cayó en un tile: apretar, no arrastrar.
-        if let press = window.pressAt, press(point) {
+        // El menú no se arrastra con la pinza: o aprieta un tile, o no pasa
+        // nada. Así no se "escapa" el panel cuando el dedo no acierta.
+        if let press = window.pressAt {
+            _ = press(point)
             return
         }
 
