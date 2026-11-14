@@ -83,6 +83,15 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private var lastHands: [HandPose] = []
     private weak var menuWindow: SpatialWindow?
 
+    /// Cuántas veces se lanzó ARKit y cuántos frames llegaron (diagnóstico).
+    private var arkitRuns = 0
+    private var frameCount = 0
+
+    /// Último frame bueno de la 0.5× (el buffer aparece sólo en algunos frames,
+    /// así que se reutiliza para que el fondo no parpadee).
+    private var ultraWideBuffer: CVPixelBuffer?
+    private var ultraWideAt: CFTimeInterval = 0
+
     /// Diagnóstico en pantalla (posición de la cámara y estado del tracking).
     @Published var debugText = ""
     private var lastDebugAt: CFTimeInterval = 0
@@ -162,7 +171,16 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             sceneView.automaticallyUpdatesLighting = false
             sceneView.antialiasingMode = .none
             sceneView.preferredFramesPerSecond = 60
-            arSession.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+
+            // CLAVE: sólo el primer lanzamiento resetea el origen del mundo.
+            // Si se resetea de nuevo, el origen se mueve a donde estás parado y
+            // todo lo que estaba delante tuyo vuelve a aparecer delante tuyo
+            // (parece que las ventanas te siguen).
+            let options: ARSession.RunOptions = arkitRuns == 0
+                ? [.resetTracking, .removeExistingAnchors]
+                : []
+            arSession.run(configuration, options: options)
+            arkitRuns += 1
             wideView.stop()
 
         case .ultraWide:
@@ -171,7 +189,6 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         }
 
         applyModeVisibility()
-        ensureMenu()
 
         // Los frames se leen acá (no con el delegate de ARSession) para no
         // pelearse con ARSCNView, que necesita quedarse con ese delegate.
@@ -304,10 +321,19 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         switch cameraMode {
         case .arkit:
             if let frame = arSession.currentFrame {
-                let ultraWide = ARFrameUltraWide.pixelBuffer(from: frame)
-                let validUltraWide = ultraWide.flatMap { Self.isUsable($0) ? $0 : nil }
+                frameCount += 1
+                let now = CACurrentMediaTime()
 
-                if let validUltraWide {
+                let candidate = ARFrameUltraWide.pixelBuffer(from: frame)
+                    .flatMap { Self.isUsable($0) ? $0 : nil }
+                if let candidate {
+                    ultraWideBuffer = candidate
+                    ultraWideAt = now
+                }
+
+                let useUltraWide = ultraWideBuffer != nil && now - ultraWideAt < 0.5
+
+                if useUltraWide, let validUltraWide = ultraWideBuffer {
                     // 6DoF de ARKit + imagen de la 0.5×, dibujada por nosotros.
                     cameraImageView.isHidden = false
                     sceneView.isHidden = true
@@ -334,7 +360,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                     buffer = frame.capturedImage
                 }
 
-                updateDebug(frame: frame, usingUltraWide: validUltraWide != nil)
+                updateDebug(frame: frame, usingUltraWide: useUltraWide)
             }
 
         case .ultraWide:
@@ -345,6 +371,12 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         guard let pose else { return }
         lastPose = pose
         hostView.layout(pose: pose)
+
+        // El menú se crea recién cuando ya hay una pose real de ARKit, así su
+        // posición queda en el mundo y no en el origen "provisional".
+        if menuWindow == nil {
+            ensureMenu()
+        }
 
         if occlusionEnabled, let buffer {
             occlusionView.update(buffer: buffer, hands: lastHands, orientation: orientation)
@@ -379,15 +411,15 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         }
 
         let camera = frame.camera.transform.columns.3
-        var text = String(format: "%@ · %@ · cam %.2f %.2f %.2f",
+        var text = String(format: "%@·%@·r%d f%d·cam %.2f %.2f·menú",
                           usingUltraWide ? "0.5×" : "1×",
                           tracking,
-                          Double(camera.x), Double(camera.y), Double(camera.z))
+                          arkitRuns, frameCount,
+                          Double(camera.x), Double(camera.z))
 
         if let menu = menuWindow {
             let position = menu.position
-            text += String(format: " · menú %.2f %.2f %.2f",
-                           Double(position.x), Double(position.y), Double(position.z))
+            text += String(format: " %.2f %.2f", Double(position.x), Double(position.z))
         }
         debugText = text
     }

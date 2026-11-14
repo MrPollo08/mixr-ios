@@ -17,6 +17,7 @@ final class GestureEngine {
 
     private var startPoint: CGPoint = .zero
     private var startPosition: simd_float3 = .zero
+    private var startCamera: simd_float3 = .zero
     private var startPointsPerMeter: CGFloat = 0
     private var startHandSize: CGFloat = 0
     private var depthRatio: Float = 1
@@ -118,7 +119,6 @@ final class GestureEngine {
         let transform = pose.transform
         let right = simd_float3(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
         let up = simd_float3(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
-        let camera = simd_float3(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
 
         // Desplazamiento lateral en metros (respecto del punto de agarre).
         let lateral = right * Float(total.width / pointsPerMeter)
@@ -135,7 +135,7 @@ final class GestureEngine {
         }
 
         let base = startPosition + lateral
-        let position = camera + (base - camera) * depthRatio
+        let position = startCamera + (base - startCamera) * depthRatio
         host.setPosition(window, position)
     }
 
@@ -155,6 +155,12 @@ final class GestureEngine {
         dragKey = hand.key
         startPoint = point
         startPosition = window.position
+        if let cameraPose = host.lastPose {
+            let column = cameraPose.transform.columns.3
+            startCamera = simd_float3(column.x, column.y, column.z)
+        } else {
+            startCamera = .zero
+        }
         startPointsPerMeter = window.pointsPerMeter
         startHandSize = handSize(of: hand)
         depthRatio = 1
