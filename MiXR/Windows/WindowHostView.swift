@@ -59,13 +59,13 @@ final class WindowHostView: UIView {
                 guard let self, let menu, let view else { return false }
                 return menu.press(atLocal: view.convert(point, from: self))
             }
-            window.hoverAt = { [weak self, weak menu, weak view] point in
+            window.hoverAt = { [weak self, weak menu, weak view] point, dt in
                 guard let self, let menu, let view else { return }
                 guard let point else {
-                    menu.setHover(atLocal: nil)
+                    menu.updatePointer(atLocal: nil, dt: dt)
                     return
                 }
-                menu.setHover(atLocal: view.convert(point, from: self))
+                menu.updatePointer(atLocal: view.convert(point, from: self), dt: dt)
             }
         }
 

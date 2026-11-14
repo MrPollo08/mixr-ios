@@ -3,37 +3,23 @@ import Foundation
 import QuartzCore
 import simd
 
-/// Traduce el pellizco de las manos en mover, estirar y acercar/alejar ventanas.
+/// Traduce el pellizco de las manos en mover y escalar ventanas.
 ///
-/// Reglas:
-///  - El ancla es la **yema del índice** (estable), no el punto medio de la pinza.
-///  - Cuerpo de la ventana  → arrastre en el plano (izquierda/derecha/arriba/abajo).
-///  - **Costado** de la ventana → estirar: el borde sigue a la mano y la ventana
-///    crece o se achica (tirás hacia afuera y se agranda).
-///  - Acercar la mano a la cámara mientras arrastrás → la ventana **se acerca**
-///    (usa el tamaño aparente de la mano como sensor de profundidad).
-///  - Dos manos en pinza → escala libre.
-///  - 300 ms de gracia si Vision pierde la mano.
+/// - **Pinza** sobre una ventana → la mueve (y acercando la mano a la cámara la
+///   ventana se acerca; alejándola, se va).
+/// - **Dos manos** en pinza → escala (separar agranda, juntar achica).
+/// - 300 ms de gracia si Vision pierde la mano, así no se suelta a mitad de camino.
+/// - Sobre el menú, la pinza **aprieta el tile** en vez de arrastrar.
 final class GestureEngine {
-
-    private enum Mode {
-        case translate
-        case stretch
-    }
 
     private var grabbed: SpatialWindow?
     private var dragKey: String?
-    private var mode: Mode = .translate
 
     private var startPoint: CGPoint = .zero
     private var startPosition: simd_float3 = .zero
     private var startPointsPerMeter: CGFloat = 0
     private var startHandSize: CGFloat = 0
-    private var applied: CGSize = .zero
-
     private var depthRatio: Float = 1
-    private var stretchOffset: CGFloat = 0
-
     private var lastSeenAt: CFTimeInterval = 0
 
     private var twoHandResize = false
@@ -41,6 +27,7 @@ final class GestureEngine {
     private var resizeStartWidth: CGFloat = 0
 
     private var latch: [String: Bool] = [:]
+    private var lastHoverAt: CFTimeInterval = 0
     private let grace: TimeInterval = 0.30
 
     var isDragging: Bool { grabbed != nil }
@@ -88,7 +75,7 @@ final class GestureEngine {
         }
         lastSeenAt = now
 
-        // 4. Dos manos en pinza: escala libre.
+        // 4. Dos manos en pinza: escala.
         if pinching.count >= 2 {
             let a = dragPoint(pinching[0])
             let b = dragPoint(pinching[1])
@@ -112,17 +99,11 @@ final class GestureEngine {
             return
         }
 
-        let point = dragPoint(owner)
-
-        switch mode {
-        case .stretch:
-            stretch(window, to: point, host: host)
-        case .translate:
-            translate(window, with: owner, to: point, pose: pose, host: host)
-        }
+        // 6. Mover (y acercar/alejar con el tamaño aparente de la mano).
+        translate(window, with: owner, to: dragPoint(owner), pose: pose, host: host)
     }
 
-    // MARK: - Arrastre + profundidad
+    // MARK: - Mover + profundidad
 
     private func translate(_ window: SpatialWindow,
                            with hand: HandPose,
@@ -130,7 +111,6 @@ final class GestureEngine {
                            pose: CameraPose,
                            host: WindowHostView) {
         let total = CGSize(width: point.x - startPoint.x, height: point.y - startPoint.y)
-        applied = total
 
         let pointsPerMeter = startPointsPerMeter > 1 ? startPointsPerMeter : window.pointsPerMeter
         guard pointsPerMeter > 1 else { return }
@@ -140,7 +120,7 @@ final class GestureEngine {
         let up = simd_float3(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
         let camera = simd_float3(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
 
-        // Desplazamiento lateral en metros (constante respecto del agarre).
+        // Desplazamiento lateral en metros (respecto del punto de agarre).
         let lateral = right * Float(total.width / pointsPerMeter)
             + up * Float(-total.height / pointsPerMeter)
 
@@ -159,15 +139,6 @@ final class GestureEngine {
         host.setPosition(window, position)
     }
 
-    // MARK: - Estirar desde el costado
-
-    private func stretch(_ window: SpatialWindow, to point: CGPoint, host: WindowHostView) {
-        let center = host.center(of: window)
-        let halfDistance = abs(point.x - center.x) + stretchOffset
-        let meters = halfDistance * 2 / max(window.pointsPerMeter, 1)
-        host.setWidth(window, meters: min(max(meters, Config.minWindowWidth), Config.maxWindowWidth))
-    }
-
     // MARK: - Agarre
 
     private func begin(window: SpatialWindow, with hand: HandPose, host: WindowHostView) {
@@ -178,29 +149,15 @@ final class GestureEngine {
             return
         }
 
-        let zone = host.grabZone(for: window, at: point)
-
         grabbed = window
         dragKey = hand.key
         startPoint = point
         startPosition = window.position
         startPointsPerMeter = window.pointsPerMeter
         startHandSize = handSize(of: hand)
-        applied = .zero
         depthRatio = 1
         twoHandResize = false
         lastSeenAt = CACurrentMediaTime()
-
-        switch zone {
-        case .body:
-            mode = .translate
-            stretchOffset = 0
-        case .leftEdge, .rightEdge:
-            mode = .stretch
-            let halfWidth = window.physicalWidth * window.pointsPerMeter / 2
-            let halfDistance = abs(point.x - host.center(of: window).x)
-            stretchOffset = halfWidth - halfDistance
-        }
 
         host.bringToFront(window)
         host.setGrabbed(window, grabbed: true)
@@ -216,11 +173,16 @@ final class GestureEngine {
         depthRatio = 1
     }
 
-    /// Resalta el tile del menú que está debajo del dedo (sin apretar).
+    /// Resalta el tile del menú que está debajo del dedo y acumula el dwell.
     private func updateHover(poses: [HandPose], host: WindowHostView) {
         guard let menu = host.windows.first(where: { $0.pressAt != nil }) else { return }
+
+        let now = CACurrentMediaTime()
+        let dt = lastHoverAt == 0 ? 0 : CGFloat(min(0.1, now - lastHoverAt))
+        lastHoverAt = now
+
         let tip: CGPoint? = poses.first.map { $0.joints[.indexTip] ?? $0.pinchPoint }
-        menu.hoverAt?(tip)
+        menu.hoverAt?(tip, dt)
     }
 
     /// Punto de control: la yema del índice (estable) y si no, la pinza.

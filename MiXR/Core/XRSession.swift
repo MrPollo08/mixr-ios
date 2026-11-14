@@ -51,18 +51,16 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
     private static let modeKey = "mixr.cameraMode"
 
-    /// Arranca en 1× (ARKit 6DoF): así las ventanas quedan clavadas en el
-    /// mundo y no te siguen. 0.5× da más campo pero es solo rotación.
+    /// Siempre 1× con ARKit (6DoF): es el único modo donde las ventanas quedan
+    /// clavadas en el mundo y no te siguen. La 0.5× no tiene traslación, así
+    /// que se descartó (quedó el código por si algún día vuelve como opción).
     private static func savedMode() -> CameraMode {
-        switch UserDefaults.standard.string(forKey: modeKey) {
-        case "ultraWide": return .ultraWide
-        case "arkit": return .arkit
-        default: return .arkit
-        }
+        UserDefaults.standard.removeObject(forKey: modeKey)
+        return .arkit
     }
 
     private func saveMode() {
-        UserDefaults.standard.set(cameraMode == .arkit ? "arkit" : "ultraWide", forKey: Self.modeKey)
+        UserDefaults.standard.removeObject(forKey: Self.modeKey)
     }
 
     // MARK: - Vistas de UIKit
@@ -281,7 +279,6 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         case .control: toggleControlMode()
         case .hands: toggleHands()
         case .occlusion: toggleOcclusion()
-        case .camera: toggleCameraMode()
         case .recenter: recenterView()
         case .clear: closeAllWindows()
         }
@@ -349,7 +346,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             // La mano es el mouse del PC: no se tocan las ventanas.
             overlay.setPointer(pointer.update(poses: poses, viewport: overlay.bounds.size))
         } else {
-            overlay.setPointer(nil)
+            // Sobre el menú, mostramos una retícula para ver dónde apunta el dedo.
+            if let tip = poses.first.map({ $0.joints[.indexTip] ?? $0.pinchPoint }),
+               let target = hostView.window(at: tip),
+               target.pressAt != nil {
+                overlay.setPointer(tip)
+            } else {
+                overlay.setPointer(nil)
+            }
             gestures.update(poses: poses, host: hostView)
         }
     }

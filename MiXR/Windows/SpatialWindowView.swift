@@ -27,8 +27,6 @@ final class SpatialWindowView: UIView {
     private let closeButton = UIButton(type: .system)
     private let linkButton = UIButton(type: .system)
     private let contentContainer = UIView()
-    private let leftGrip = UIView()
-    private let rightGrip = UIView()
 
     private(set) var content: UIView?
 
@@ -109,15 +107,6 @@ final class SpatialWindowView: UIView {
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapGesture))
         tap.cancelsTouchesInView = false
         addGestureRecognizer(tap)
-
-        // Agarraderas para estirar la ventana con la mano (o con el dedo).
-        for grip in [leftGrip, rightGrip] {
-            grip.backgroundColor = UIColor.white.withAlphaComponent(0.3)
-            grip.layer.cornerRadius = 2.5
-            grip.layer.cornerCurve = .continuous
-            grip.isUserInteractionEnabled = false
-            addSubview(grip)
-        }
     }
 
     private func style(button: UIButton, symbol: String) {
@@ -174,11 +163,6 @@ final class SpatialWindowView: UIView {
         titleLabel.frame = CGRect(x: 14, y: 0,
                                   width: max(0, linkButton.frame.minX - 20),
                                   height: Self.headerHeight)
-
-        let gripHeight = min(64, max(28, bounds.height * 0.34))
-        let gripY = Self.headerHeight + (bounds.height - Self.headerHeight - gripHeight) / 2
-        leftGrip.frame = CGRect(x: 3, y: gripY, width: 5, height: gripHeight)
-        rightGrip.frame = CGRect(x: bounds.width - 8, y: gripY, width: 5, height: gripHeight)
     }
 
     // MARK: - Acciones

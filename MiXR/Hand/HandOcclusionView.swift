@@ -20,6 +20,10 @@ final class HandOcclusionView: UIView {
     private var orientation: UIInterfaceOrientation = .landscapeRight
     private var busy = false
 
+    /// La máscara se dibuja a media resolución (más rápido) y después se
+    /// reescala para que coincida con la imagen de la cámara.
+    private static let maskScale: CGFloat = 0.5
+
     override init(frame: CGRect) {
         context = MTLCreateSystemDefaultDevice().map {
             CIContext(mtlDevice: $0, options: [.cacheIntermediates: false])
@@ -120,6 +124,8 @@ final class HandOcclusionView: UIView {
         guard let mask = makeMask(hands: hands, size: size) else { return nil }
 
         let maskImage = CIImage(cgImage: mask)
+            .transformed(by: CGAffineTransform(scaleX: 1 / Self.maskScale,
+                                               y: 1 / Self.maskScale))
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 4])
             .cropped(to: rect)
 
@@ -135,9 +141,8 @@ final class HandOcclusionView: UIView {
     // MARK: - Máscara de la mano
 
     private func makeMask(hands: [HandPose], size: CGSize) -> CGImage? {
-        let scale: CGFloat = 0.5
-        let width = Int(size.width * scale)
-        let height = Int(size.height * scale)
+        let width = Int(size.width * Self.maskScale)
+        let height = Int(size.height * Self.maskScale)
         guard width > 1, height > 1 else { return nil }
 
         guard let ctx = CGContext(data: nil,
@@ -155,7 +160,7 @@ final class HandOcclusionView: UIView {
 
         // A partir de acá dibujamos en puntos de pantalla, con el origen arriba
         // a la izquierda (como UIKit).
-        ctx.scaleBy(x: scale, y: scale)
+        ctx.scaleBy(x: Self.maskScale, y: Self.maskScale)
         ctx.translateBy(x: 0, y: size.height)
         ctx.scaleBy(x: 1, y: -1)
 

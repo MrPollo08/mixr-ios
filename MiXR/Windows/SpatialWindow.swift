@@ -85,8 +85,8 @@ final class SpatialWindow {
 
     /// Si la ventana es un menú: apretar un botón (en coordenadas del host).
     var pressAt: ((CGPoint) -> Bool)?
-    /// Resaltar el botón bajo el dedo (nil = ningún dedo cerca).
-    var hoverAt: ((CGPoint?) -> Void)?
+    /// El dedo se movió sobre el menú (nil = no hay dedo cerca). dt en segundos.
+    var hoverAt: ((CGPoint?, CGFloat) -> Void)?
 
     init(kind: WindowKind, position: simd_float3, physicalWidth: CGFloat, view: SpatialWindowView) {
         self.kind = kind

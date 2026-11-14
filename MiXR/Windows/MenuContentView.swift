@@ -1,6 +1,6 @@
 import UIKit
 
-/// Acción que se dispara al apretar un tile del menú flotante.
+/// Acción que se dispara al elegir un tile del menú flotante.
 enum MenuAction: CaseIterable {
     case pc
     case youtube
@@ -10,21 +10,19 @@ enum MenuAction: CaseIterable {
     case control
     case hands
     case occlusion
-    case camera
     case recenter
     case clear
 
     var title: String {
         switch self {
-        case .pc: return "PC"
+        case .pc: return "Pantalla PC"
         case .youtube: return "YouTube"
         case .video: return "Videos"
         case .photos: return "Fotos"
-        case .web: return "Web"
+        case .web: return "Navegador"
         case .control: return "Mouse PC"
         case .hands: return "Manos"
         case .occlusion: return "Oclusión"
-        case .camera: return "Cámara"
         case .recenter: return "Centrar"
         case .clear: return "Limpiar"
         }
@@ -40,7 +38,6 @@ enum MenuAction: CaseIterable {
         case .control: return "cursorarrow"
         case .hands: return "hand.raised.fill"
         case .occlusion: return "circle.dashed"
-        case .camera: return "arrow.triangle.2.circlepath.camera"
         case .recenter: return "scope"
         case .clear: return "trash"
         }
@@ -49,17 +46,16 @@ enum MenuAction: CaseIterable {
     /// Gradiente del tile, estilo home de Quest.
     var colors: [UIColor] {
         switch self {
-        case .pc: return [UIColor(hex: 0x6C5CE7), UIColor(hex: 0x3B2FA8)]
-        case .youtube: return [UIColor(hex: 0xFF4D4D), UIColor(hex: 0xB31D1D)]
-        case .video: return [UIColor(hex: 0x3A8DFF), UIColor(hex: 0x1153A6)]
-        case .photos: return [UIColor(hex: 0xFF5FA2), UIColor(hex: 0xA61F62)]
-        case .web: return [UIColor(hex: 0x16C79A), UIColor(hex: 0x0A7A5E)]
-        case .control: return [UIColor(hex: 0xF7B731), UIColor(hex: 0xB37A08)]
-        case .hands: return [UIColor(hex: 0x2ED573), UIColor(hex: 0x157F41)]
-        case .occlusion: return [UIColor(hex: 0x9B5DE5), UIColor(hex: 0x5A2E93)]
-        case .camera: return [UIColor(hex: 0x4B6584), UIColor(hex: 0x26313F)]
-        case .recenter: return [UIColor(hex: 0x45AAF2), UIColor(hex: 0x14639E)]
-        case .clear: return [UIColor(hex: 0xEF5777), UIColor(hex: 0x8E1F37)]
+        case .pc: return [UIColor(hex: 0x7C6CF0), UIColor(hex: 0x3B2FA8)]
+        case .youtube: return [UIColor(hex: 0xFF5A5A), UIColor(hex: 0xC01F1F)]
+        case .video: return [UIColor(hex: 0x4A9DFF), UIColor(hex: 0x0F4E9E)]
+        case .photos: return [UIColor(hex: 0xFF6FB0), UIColor(hex: 0xA81C60)]
+        case .web: return [UIColor(hex: 0x1FD6A6), UIColor(hex: 0x087A5C)]
+        case .control: return [UIColor(hex: 0xFFC44D), UIColor(hex: 0xB87B05)]
+        case .hands: return [UIColor(hex: 0x35E084), UIColor(hex: 0x118A44)]
+        case .occlusion: return [UIColor(hex: 0xA96BF0), UIColor(hex: 0x552A93)]
+        case .recenter: return [UIColor(hex: 0x53B8FF), UIColor(hex: 0x0E5E9E)]
+        case .clear: return [UIColor(hex: 0xF4617B), UIColor(hex: 0x8E1A2E)]
         }
     }
 }
@@ -73,20 +69,22 @@ extension UIColor {
     }
 }
 
-/// Tile cuadrado con degradé, ícono y nombre: el bloque del menú.
+/// Tile con degradé e ícono. El nombre va **debajo**, fuera del tile.
 final class MenuTileView: UIView {
 
     let action: MenuAction
 
     private let gradient = CAGradientLayer()
+    private let progressView = UIView()
     private let icon = UIImageView()
-    private let label = UILabel()
+
+    private var progress: CGFloat = 0
 
     init(action: MenuAction) {
         self.action = action
         super.init(frame: .zero)
 
-        layer.cornerRadius = 13
+        layer.cornerRadius = 10
         layer.cornerCurve = .continuous
         layer.masksToBounds = true
 
@@ -95,18 +93,14 @@ final class MenuTileView: UIView {
         gradient.endPoint = CGPoint(x: 1, y: 1)
         layer.insertSublayer(gradient, at: 0)
 
+        progressView.backgroundColor = UIColor.white.withAlphaComponent(0.34)
+        progressView.isHidden = true
+        addSubview(progressView)
+
         icon.image = UIImage(systemName: action.symbol)
         icon.tintColor = .white
         icon.contentMode = .scaleAspectFit
         addSubview(icon)
-
-        label.text = action.title
-        label.font = .systemFont(ofSize: 8.5, weight: .semibold)
-        label.textColor = UIColor.white.withAlphaComponent(0.95)
-        label.textAlignment = .center
-        label.adjustsFontSizeToFitWidth = true
-        label.minimumScaleFactor = 0.65
-        addSubview(label)
     }
 
     required init?(coder: NSCoder) {
@@ -120,56 +114,78 @@ final class MenuTileView: UIView {
         gradient.frame = bounds
         CATransaction.commit()
 
-        let iconSize = min(bounds.width * 0.46, 22)
+        let fill = bounds.height * progress
+        progressView.frame = CGRect(x: 0, y: bounds.height - fill,
+                                    width: bounds.width, height: fill)
+
+        let iconSize = min(bounds.height * 0.52, bounds.width * 0.42)
         icon.frame = CGRect(x: (bounds.width - iconSize) / 2,
-                            y: bounds.height * 0.18,
+                            y: (bounds.height - iconSize) / 2,
                             width: iconSize, height: iconSize)
-        label.frame = CGRect(x: 3,
-                             y: icon.frame.maxY + 2,
-                             width: max(0, bounds.width - 6),
-                             height: max(0, bounds.height - icon.frame.maxY - 5))
     }
 
     func setHovered(_ hovered: Bool) {
         layer.borderWidth = hovered ? 2.5 : 0
         layer.borderColor = UIColor.white.withAlphaComponent(0.95).cgColor
-        transform = hovered ? CGAffineTransform(scaleX: 1.05, y: 1.05) : .identity
+        transform = hovered ? CGAffineTransform(scaleX: 1.04, y: 1.04) : .identity
+    }
+
+    /// 0…1: cuánto falta para que se abra.
+    func setProgress(_ value: CGFloat) {
+        let clamped = min(max(value, 0), 1)
+        guard abs(clamped - progress) > 0.005 else { return }
+        progress = clamped
+        progressView.isHidden = clamped < 0.01
+        setNeedsLayout()
     }
 
     func flash() {
-        transform = CGAffineTransform(scaleX: 0.93, y: 0.93)
+        transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
         UIView.animate(withDuration: 0.18, delay: 0.08, options: [.curveEaseOut]) {
             self.transform = .identity
         }
     }
+
+    func resetProgress() {
+        progress = 0
+        progressView.isHidden = true
+        setNeedsLayout()
+    }
 }
 
-/// Contenido del menú flotante: un panel tipo home de Quest.
+/// Menú flotante estilo home de Quest: riel a la izquierda, barra con filtros
+/// arriba y grilla de tiles anchos con el nombre debajo.
 ///
-/// Sidebar con "Aplicaciones / Mundos", título y grilla de tiles de colores.
-/// Se aprieta con la pinza (o con el dedo si el tracking falla).
+/// **Se elige apuntando con el dedo índice**: el tile se ilumina y una barra lo
+/// va llenando; al completarse, se abre. También con pinza o toque (instantáneo).
 final class MenuContentView: UIView {
 
     var onAction: ((MenuAction) -> Void)?
 
-    private let sidebar = UIView()
-    private let searchPill = UIView()
-    private let searchLabel = UILabel()
-    private let appsRow = UIView()
-    private let appsLabel = UILabel()
-    private let worldsRow = UIView()
-    private let worldsLabel = UILabel()
+    private let rail = UIView()
+    private var railIcons: [UIImageView] = []
 
     private let titleLabel = UILabel()
-    private let countLabel = UILabel()
+    private let chipAll = UILabel()
+    private let chipRecent = UILabel()
 
     private var tiles: [MenuTileView] = []
+    private var labels: [UILabel] = []
+    private var cells: [CGRect] = []
+
+    private var focusedTile: MenuTileView?
+    private var firedTile: MenuTileView?
+    private var dwell: CGFloat = 0
+
+    /// Segundos que hay que dejar el dedo sobre un tile para abrirlo.
+    private var dwellTime: CGFloat = 0.6
 
     private let columns = 4
-    private let inset: CGFloat = 9
-    private let spacing: CGFloat = 7
-    private let sidebarWidth: CGFloat = 66
-    private let headerHeight: CGFloat = 20
+    private let inset: CGFloat = 8
+    private let spacing: CGFloat = 5
+    private let railWidth: CGFloat = 22
+    private let headerHeight: CGFloat = 15
+    private let labelHeight: CGFloat = 9
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -184,61 +200,56 @@ final class MenuContentView: UIView {
     // MARK: - Construcción
 
     private func build() {
-        sidebar.backgroundColor = UIColor.white.withAlphaComponent(0.05)
-        sidebar.layer.cornerRadius = 12
-        sidebar.layer.cornerCurve = .continuous
-        addSubview(sidebar)
+        rail.backgroundColor = UIColor.white.withAlphaComponent(0.045)
+        rail.layer.cornerRadius = 9
+        rail.layer.cornerCurve = .continuous
+        addSubview(rail)
 
-        searchPill.backgroundColor = UIColor.white.withAlphaComponent(0.09)
-        searchPill.layer.cornerRadius = 7
-        sidebar.addSubview(searchPill)
+        for symbol in ["magnifyingglass", "square.grid.2x2.fill", "arrow.down.circle", "gearshape"] {
+            let imageView = UIImageView(image: UIImage(systemName: symbol))
+            imageView.tintColor = UIColor.white.withAlphaComponent(0.55)
+            imageView.contentMode = .scaleAspectFit
+            rail.addSubview(imageView)
+            railIcons.append(imageView)
+        }
 
-        searchLabel.text = "Buscar"
-        searchLabel.font = .systemFont(ofSize: 8, weight: .medium)
-        searchLabel.textColor = UIColor.white.withAlphaComponent(0.55)
-        searchPill.addSubview(searchLabel)
-
-        styleRow(appsRow, selected: true)
-        styleRow(worldsRow, selected: false)
-        sidebar.addSubview(appsRow)
-        sidebar.addSubview(worldsRow)
-
-        appsLabel.text = "▦  Aplicaciones"
-        appsLabel.font = .systemFont(ofSize: 8, weight: .semibold)
-        appsLabel.textColor = .white
-        appsRow.addSubview(appsLabel)
-
-        worldsLabel.text = "◎  Mundos"
-        worldsLabel.font = .systemFont(ofSize: 8, weight: .medium)
-        worldsLabel.textColor = UIColor.white.withAlphaComponent(0.6)
-        worldsRow.addSubview(worldsLabel)
-
-        titleLabel.text = "Aplicaciones"
+        titleLabel.text = "Todo"
         titleLabel.font = .systemFont(ofSize: 12, weight: .bold)
         titleLabel.textColor = .white
         addSubview(titleLabel)
 
-        countLabel.text = "\(MenuAction.allCases.count)"
-        countLabel.font = .systemFont(ofSize: 8, weight: .bold)
-        countLabel.textColor = UIColor.white.withAlphaComponent(0.75)
-        countLabel.textAlignment = .center
-        countLabel.backgroundColor = UIColor.white.withAlphaComponent(0.1)
-        countLabel.layer.cornerRadius = 6
-        countLabel.layer.masksToBounds = true
-        addSubview(countLabel)
+        styleChip(chipAll, text: "Todos (\(MenuAction.allCases.count))", highlighted: true)
+        styleChip(chipRecent, text: "Recientes", highlighted: false)
+        addSubview(chipAll)
+        addSubview(chipRecent)
 
         for action in MenuAction.allCases {
             let tile = MenuTileView(action: action)
             addSubview(tile)
             tiles.append(tile)
+
+            let label = UILabel()
+            label.text = action.title
+            label.font = .systemFont(ofSize: 7.5, weight: .medium)
+            label.textColor = UIColor.white.withAlphaComponent(0.85)
+            label.textAlignment = .center
+            label.adjustsFontSizeToFitWidth = true
+            label.minimumScaleFactor = 0.6
+            addSubview(label)
+            labels.append(label)
         }
     }
 
-    private func styleRow(_ row: UIView, selected: Bool) {
-        row.backgroundColor = selected
-            ? UIColor.white.withAlphaComponent(0.13)
-            : UIColor.clear
-        row.layer.cornerRadius = 7
+    private func styleChip(_ label: UILabel, text: String, highlighted: Bool) {
+        label.text = text
+        label.font = .systemFont(ofSize: 7.5, weight: .semibold)
+        label.textColor = highlighted ? .black : UIColor.white.withAlphaComponent(0.72)
+        label.textAlignment = .center
+        label.backgroundColor = highlighted
+            ? UIColor.white.withAlphaComponent(0.9)
+            : UIColor.white.withAlphaComponent(0.1)
+        label.layer.cornerRadius = 5
+        label.layer.masksToBounds = true
     }
 
     // MARK: - Layout
@@ -246,64 +257,120 @@ final class MenuContentView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        sidebar.frame = CGRect(x: inset, y: inset,
-                               width: sidebarWidth,
-                               height: max(0, bounds.height - inset * 2))
+        rail.frame = CGRect(x: inset, y: inset,
+                            width: railWidth,
+                            height: max(0, bounds.height - inset * 2))
 
-        let pillHeight: CGFloat = 18
-        searchPill.frame = CGRect(x: 6, y: 8, width: max(0, sidebarWidth - 12), height: pillHeight)
-        searchLabel.frame = CGRect(x: 8, y: 0, width: searchPill.bounds.width - 12, height: pillHeight)
+        let iconSize: CGFloat = 11
+        for (index, imageView) in railIcons.enumerated() {
+            imageView.frame = CGRect(x: (railWidth - iconSize) / 2,
+                                     y: 10 + CGFloat(index) * 20,
+                                     width: iconSize, height: iconSize)
+        }
 
-        let rowHeight: CGFloat = 20
-        appsRow.frame = CGRect(x: 6, y: searchPill.frame.maxY + 8,
-                               width: max(0, sidebarWidth - 12), height: rowHeight)
-        appsLabel.frame = CGRect(x: 7, y: 0, width: appsRow.bounds.width - 10, height: rowHeight)
-
-        worldsRow.frame = CGRect(x: 6, y: appsRow.frame.maxY + 4,
-                                 width: max(0, sidebarWidth - 12), height: rowHeight)
-        worldsLabel.frame = CGRect(x: 7, y: 0, width: worldsRow.bounds.width - 10, height: rowHeight)
-
-        let contentX = sidebar.frame.maxX + spacing + 2
+        let contentX = rail.frame.maxX + 6
         let contentWidth = bounds.width - contentX - inset
+        guard contentWidth > 20 else { return }
 
-        titleLabel.frame = CGRect(x: contentX, y: inset - 1, width: contentWidth - 30, height: headerHeight)
-        countLabel.frame = CGRect(x: bounds.width - inset - 26, y: inset + 2, width: 26, height: 14)
+        titleLabel.frame = CGRect(x: contentX, y: inset - 2, width: 60, height: headerHeight)
+        chipAll.frame = CGRect(x: bounds.width - inset - 96, y: inset, width: 52, height: 12)
+        chipRecent.frame = CGRect(x: bounds.width - inset - 40, y: inset, width: 40, height: 12)
 
         let rows = max(1, Int(ceil(Double(tiles.count) / Double(columns))))
-        let gridY = inset + headerHeight + 3
-        let availableWidth = contentWidth
+        let gridY = inset + headerHeight + 2
         let availableHeight = bounds.height - gridY - inset
-        guard availableWidth > 10, availableHeight > 10 else { return }
+        guard availableHeight > 20 else { return }
 
-        let tileWidth = (availableWidth - spacing * CGFloat(columns - 1)) / CGFloat(columns)
-        let tileHeight = (availableHeight - spacing * CGFloat(rows - 1)) / CGFloat(rows)
+        let tileWidth = (contentWidth - spacing * CGFloat(columns - 1)) / CGFloat(columns)
+        let cellHeight = (availableHeight - spacing * CGFloat(rows - 1)) / CGFloat(rows)
+        let tileHeight = max(12, cellHeight - labelHeight - 1)
+
+        cells.removeAll(keepingCapacity: true)
 
         for (index, tile) in tiles.enumerated() {
             let column = index % columns
             let row = index / columns
-            tile.frame = CGRect(x: contentX + CGFloat(column) * (tileWidth + spacing),
-                                y: gridY + CGFloat(row) * (tileHeight + spacing),
-                                width: tileWidth,
-                                height: tileHeight)
+            let x = contentX + CGFloat(column) * (tileWidth + spacing)
+            let y = gridY + CGFloat(row) * (cellHeight + spacing)
+
+            tile.frame = CGRect(x: x, y: y, width: tileWidth, height: tileHeight)
+            labels[index].frame = CGRect(x: x, y: y + tileHeight + 1,
+                                         width: tileWidth, height: labelHeight)
+            cells.append(CGRect(x: x, y: y, width: tileWidth, height: cellHeight))
         }
     }
 
-    // MARK: - Interacción (mano o dedo)
+    // MARK: - Elegir con el dedo
 
-    /// Resalta el tile que está debajo del dedo.
-    func setHover(atLocal point: CGPoint?) {
-        for tile in tiles {
-            tile.setHovered(point.map { tile.frame.contains($0) } ?? false)
+    /// El dedo índice apunta; si se queda quieto sobre un tile, se abre.
+    func updatePointer(atLocal point: CGPoint?, dt: CGFloat) {
+        guard let point, let tile = tile(at: point) else {
+            clearFocus()
+            return
+        }
+
+        if let fired = firedTile, fired !== tile {
+            fired.resetProgress()
+            firedTile = nil
+        }
+
+        if tile !== focusedTile {
+            focusedTile?.setProgress(0)
+            focusedTile?.setHovered(false)
+            focusedTile = tile
+            tile.setHovered(true)
+            dwell = 0
+        }
+
+        // Este ya se abrió: esperamos a que el dedo salga.
+        if firedTile === tile { return }
+
+        dwell = min(1, dwell + dt / max(dwellTime, 0.1))
+        tile.setProgress(dwell)
+
+        if dwell >= 1 {
+            firedTile = tile
+            tile.flash()
+            onAction?(tile.action)
         }
     }
 
-    /// Aprieta el tile que está en ese punto. Devuelve true si consumió el gesto.
+    /// Aprieta el tile que está en ese punto (pinza o toque). Devuelve true si consumió el gesto.
     func press(atLocal point: CGPoint) -> Bool {
-        guard let tile = tiles.first(where: { $0.frame.contains(point) }) else {
-            return false
-        }
+        guard let tile = tile(at: point) else { return false }
         tile.flash()
+        firedTile = tile
         onAction?(tile.action)
         return true
+    }
+
+    private func clearFocus() {
+        focusedTile?.setProgress(0)
+        focusedTile?.setHovered(false)
+        focusedTile = nil
+        dwell = 0
+        if firedTile != nil {
+            firedTile?.resetProgress()
+            firedTile = nil
+        }
+    }
+
+    /// Tile bajo el dedo, con margen y "imán" al más cercano para que no cueste acertar.
+    private func tile(at point: CGPoint) -> MenuTileView? {
+        for (index, cell) in cells.enumerated() where index < tiles.count {
+            if cell.insetBy(dx: -4, dy: -3).contains(point) { return tiles[index] }
+        }
+
+        var closestIndex: Int?
+        var closestDistance = CGFloat.greatestFiniteMagnitude
+        for (index, cell) in cells.enumerated() {
+            let distance = hypot(cell.midX - point.x, cell.midY - point.y)
+            if distance < closestDistance {
+                closestDistance = distance
+                closestIndex = index
+            }
+        }
+        if let index = closestIndex, closestDistance <= 26 { return tiles[index] }
+        return nil
     }
 }

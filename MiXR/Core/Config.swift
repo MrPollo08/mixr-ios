@@ -44,8 +44,8 @@ enum Config {
     static let wideCameraFPS: Int32 = 30
 
     /// Menú flotante: a qué distancia y qué ancho (metros).
-    static let menuDistance: Float = 1.15
-    static let menuWidth: CGFloat = 0.88
+    static let menuDistance: Float = 1.10
+    static let menuWidth: CGFloat = 1.00
 
     static let youtubeURL = URL(string: "https://m.youtube.com")!
 }
