@@ -75,3 +75,26 @@ jobs:
           name: xcodebuild-log
           path: xcodebuild.log
           if-no-files-found: ignore
+
+      # Deja los errores del compilador como "annotation" del run: es público y
+      # legible sin login, así se puede diagnosticar sin descargar artefactos.
+      - name: Publish build errors
+        if: failure()
+        run: |
+          set +e
+          python3 - <<'PY'
+          import os
+
+          path = "xcodebuild.log"
+          if not os.path.exists(path):
+              print("::error title=Build::no se generó xcodebuild.log")
+              raise SystemExit(0)
+
+          text = open(path, "r", errors="replace").read()
+          lines = text.splitlines()
+          errors = [line for line in lines if "error:" in line]
+          block = errors[-80:] if errors else lines[-80:]
+          message = "\n".join(block)[-60000:]
+          escaped = message.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+          print("::error title=Compilación Swift::" + escaped)
+          PY
