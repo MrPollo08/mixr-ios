@@ -114,6 +114,32 @@ final class WindowHostView: UIView {
         window?.view.setGrabbed(grabbed)
     }
 
+    /// Zona de la ventana que agarró la mano.
+    enum GrabZone {
+        case body
+        case leftEdge
+        case rightEdge
+    }
+
+    /// Los costados son "agarraderas" para estirar la ventana.
+    func grabZone(for window: SpatialWindow, at point: CGPoint) -> GrabZone {
+        let frame = window.view.frame
+        guard frame.width > 8 else { return .body }
+        let grip = min(max(frame.width * 0.15, 20), 52)
+        if point.x <= frame.minX + grip { return .leftEdge }
+        if point.x >= frame.maxX - grip { return .rightEdge }
+        return .body
+    }
+
+    func center(of window: SpatialWindow) -> CGPoint {
+        window.view.center
+    }
+
+    func setPosition(_ window: SpatialWindow, _ position: simd_float3) {
+        window.position = position
+        layoutWindow(window)
+    }
+
     // MARK: - Proyección mundo → pantalla
 
     func layout(pose: CameraPose) {

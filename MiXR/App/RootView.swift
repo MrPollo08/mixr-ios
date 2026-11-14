@@ -112,9 +112,9 @@ struct RootView: View {
             return "CONTROL DEL PC · el índice mueve el cursor · pinza = clic"
         }
         if session.cameraMode == .ultraWide {
-            return "0.5× gran angular · pinza para agarrar · dos manos para escalar"
+            return "0.5× te sigue · borde = estirar · mano cerca/lejos = profundidad"
         }
-        return "1× con 6DoF · pinza para agarrar · dos manos para escalar"
+        return "1× anclada al mundo · borde = estirar · mano cerca/lejos = profundidad"
     }
 
     // MARK: - Controles

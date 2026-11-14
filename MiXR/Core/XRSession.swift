@@ -46,8 +46,24 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     /// IP del PC conectado (se detecta sola cuando llega el stream).
     @Published var pcHost: String?
 
-    @Published private(set) var cameraMode: CameraMode = .ultraWide
+    @Published private(set) var cameraMode: CameraMode = XRSession.savedMode()
     @Published private(set) var occlusionEnabled = true
+
+    private static let modeKey = "mixr.cameraMode"
+
+    /// Arranca en 1× (ARKit 6DoF): así las ventanas quedan clavadas en el
+    /// mundo y no te siguen. 0.5× da más campo pero es solo rotación.
+    private static func savedMode() -> CameraMode {
+        switch UserDefaults.standard.string(forKey: modeKey) {
+        case "ultraWide": return .ultraWide
+        case "arkit": return .arkit
+        default: return .arkit
+        }
+    }
+
+    private func saveMode() {
+        UserDefaults.standard.set(cameraMode == .arkit ? "arkit" : "ultraWide", forKey: Self.modeKey)
+    }
 
     // MARK: - Vistas de UIKit
 
@@ -184,7 +200,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private func applyModeVisibility() {
         sceneView.isHidden = cameraMode != .arkit
         wideView.isHidden = cameraMode != .ultraWide
-        occlusionView.isHidden = !(cameraMode == .ultraWide && occlusionEnabled)
+        occlusionView.isHidden = !occlusionEnabled
         if occlusionView.isHidden { occlusionView.clear() }
     }
 
@@ -200,6 +216,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         pause()
 
         cameraMode = mode
+        saveMode()
         lastPose = nil
         lastHands = []
         overlay.render(poses: [])
@@ -251,7 +268,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         lastPose = pose
         hostView.layout(pose: pose)
 
-        if cameraMode == .ultraWide, occlusionEnabled, let buffer {
+        if occlusionEnabled, let buffer {
             occlusionView.update(buffer: buffer, hands: lastHands, orientation: orientation)
         }
 
