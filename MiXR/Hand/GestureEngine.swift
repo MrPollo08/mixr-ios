@@ -33,6 +33,13 @@ final class GestureEngine {
 
     var isDragging: Bool { grabbed != nil }
 
+    /// Se dispara con **doble pinza al aire** (sin tocar ninguna ventana):
+    /// sirve para traer el menú cuando se perdió de vista.
+    var onSummon: (() -> Void)?
+
+    private var lastTapAt: CFTimeInterval = 0
+    private var lastTapPoint: CGPoint?
+
     func reset() {
         grabbed = nil
         dragKey = nil
@@ -47,6 +54,8 @@ final class GestureEngine {
         // 1. Pinza por mano, con histéresis.
         var pinching: [HandPose] = []
         var activeKeys = Set<String>()
+        var emptyRising: [CGPoint] = []
+
         for hand in poses {
             activeKeys.insert(hand.key)
             let wasPinching = latch[hand.key] ?? false
@@ -54,9 +63,30 @@ final class GestureEngine {
             let isPinching = hand.pinch > threshold
             latch[hand.key] = isPinching
             if isPinching { pinching.append(hand) }
+
+            // Pinza nueva en el aire (no sobre una ventana) => posible "toque".
+            if isPinching, !wasPinching, grabbed == nil,
+               host.window(at: dragPoint(hand)) == nil {
+                emptyRising.append(dragPoint(hand))
+            }
         }
         for key in Array(latch.keys) where !activeKeys.contains(key) {
             latch[key] = nil
+        }
+
+        if grabbed == nil {
+            for point in emptyRising {
+                if now - lastTapAt < 0.7,
+                   let previous = lastTapPoint,
+                   hypot(point.x - previous.x, point.y - previous.y) < 160 {
+                    lastTapAt = 0
+                    lastTapPoint = nil
+                    onSummon?()
+                } else {
+                    lastTapAt = now
+                    lastTapPoint = point
+                }
+            }
         }
 
         // 2. Sin ventana agarrada: resaltar el menú y ver si la pinza cae en algo.

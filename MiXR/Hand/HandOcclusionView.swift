@@ -23,6 +23,11 @@ final class HandOcclusionView: UIView {
     /// La máscara se dibuja a media resolución (más rápido) y después se
     /// reescala para que coincida con la imagen de la cámara.
     private static let maskScale: CGFloat = 0.5
+    /// El compuesto final también sale a media resolución (se estira al
+    /// dibujarse) y se limita a 20 por segundo: la mano no necesita más.
+    private static let outputScale: CGFloat = 0.5
+    private static let maxRenderRate: CFTimeInterval = 1.0 / 20.0
+    private var lastRenderAt: CFTimeInterval = 0
 
     override init(frame: CGRect) {
         context = MTLCreateSystemDefaultDevice().map {
@@ -71,11 +76,15 @@ final class HandOcclusionView: UIView {
         guard context != nil, !busy else { return }
         guard bounds.width > 1, bounds.height > 1 else { return }
 
+        let now = CACurrentMediaTime()
+        guard now - lastRenderAt >= Self.maxRenderRate else { return }
+
         guard let buffer, !hands.isEmpty else {
             imageLayer.contents = nil
             return
         }
 
+        lastRenderAt = now
         busy = true
         let hands = self.hands
         let orientation = self.orientation
@@ -135,7 +144,13 @@ final class HandOcclusionView: UIView {
             kCIInputBackgroundImageKey: clear
         ])
 
-        return context.createCGImage(blended, from: rect)
+        // Salida a media resolución: la capa la estira, y ahorra muchísimo CPU.
+        let output = blended.transformed(by: CGAffineTransform(scaleX: Self.outputScale,
+                                                               y: Self.outputScale))
+        let outputRect = CGRect(x: 0, y: 0,
+                                width: rect.width * Self.outputScale,
+                                height: rect.height * Self.outputScale)
+        return context.createCGImage(output, from: outputRect)
     }
 
     // MARK: - Máscara de la mano

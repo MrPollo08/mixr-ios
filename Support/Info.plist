@@ -36,7 +36,6 @@
 	<array>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
-		<string>UIInterfaceOrientationPortrait</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>La cámara se usa para ver el mundo real (realidad mixta) y para el seguimiento de tus manos con Vision. El video nunca sale del dispositivo.</string>

@@ -47,7 +47,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     @Published var pcHost: String?
 
     @Published private(set) var cameraMode: CameraMode = XRSession.savedMode()
-    @Published private(set) var occlusionEnabled = true
+    @Published private(set) var occlusionEnabled = false
 
     private static let modeKey = "mixr.cameraMode"
 
@@ -66,7 +66,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     // MARK: - Vistas de UIKit
 
     let sceneView = ARSCNView()
-    let cameraImageView = CameraImageView()
+    let cameraSampleView = CameraSampleView()
     let wideView = WideCameraView()
     let hostView = WindowHostView()
     let occlusionView = HandOcclusionView()
@@ -82,7 +82,6 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private var lastPose: CameraPose?
     private var lastHands: [HandPose] = []
     private weak var menuWindow: SpatialWindow?
-
     /// Cuántas veces se lanzó ARKit y cuántos frames llegaron (diagnóstico).
     private var arkitRuns = 0
     private var frameCount = 0
@@ -91,6 +90,10 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     /// así que se reutiliza para que el fondo no parpadee).
     private var ultraWideBuffer: CVPixelBuffer?
     private var ultraWideAt: CFTimeInterval = 0
+
+    /// FPS reales de entrega de ARKit (diagnóstico).
+    private var lastFrameTime: TimeInterval = 0
+    private var smoothedFPS: Double = 0
 
     /// Diagnóstico en pantalla (posición de la cámara y estado del tracking).
     @Published var debugText = ""
@@ -103,14 +106,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         view.clipsToBounds = true
 
         // De abajo a arriba: cámara, ventanas, manos (oclusión), esqueleto.
-        let stack: [UIView] = [cameraImageView, sceneView, wideView, hostView, occlusionView, overlay]
+        let stack: [UIView] = [cameraSampleView, sceneView, wideView, hostView, occlusionView, overlay]
         for subview in stack {
             subview.frame = view.bounds
             subview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             view.addSubview(subview)
         }
 
-        cameraImageView.isHidden = true
+        cameraSampleView.isHidden = true
         sceneView.isUserInteractionEnabled = false
         wideView.isUserInteractionEnabled = false
         occlusionView.isUserInteractionEnabled = false
@@ -130,6 +133,10 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
     func start() {
         guard !isRunning else { return }
+
+        gestures.onSummon = { [weak self] in
+            self?.summonMenu()
+        }
 
         requestCameraPermission { [weak self] granted in
             guard let self else { return }
@@ -265,6 +272,12 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         }
     }
 
+    /// Doble pinza al aire: trae el menú delante de la cámara.
+    func summonMenu() {
+        ensureMenu()
+        placeMenuFront(transform: lastPose?.transform ?? matrix_identity_float4x4)
+    }
+
     // MARK: - Menú flotante
 
     private func ensureMenu() {
@@ -324,6 +337,13 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                 frameCount += 1
                 let now = CACurrentMediaTime()
 
+                let delta = frame.timestamp - lastFrameTime
+                if delta > 0.001, delta < 1 {
+                    let instant = 1 / delta
+                    smoothedFPS = smoothedFPS < 1 ? instant : smoothedFPS * 0.9 + instant * 0.1
+                }
+                lastFrameTime = frame.timestamp
+
                 let candidate = ARFrameUltraWide.pixelBuffer(from: frame)
                     .flatMap { Self.isUsable($0) ? $0 : nil }
                 if let candidate {
@@ -334,10 +354,10 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                 let useUltraWide = ultraWideBuffer != nil && now - ultraWideAt < 0.5
 
                 if useUltraWide, let validUltraWide = ultraWideBuffer {
-                    // 6DoF de ARKit + imagen de la 0.5×, dibujada por nosotros.
-                    cameraImageView.isHidden = false
+                    // 6DoF de ARKit + imagen de la 0.5×, compuesta en GPU.
+                    cameraSampleView.isHidden = false
                     sceneView.isHidden = true
-                    cameraImageView.update(buffer: validUltraWide, orientation: orientation)
+                    cameraSampleView.enqueue(validUltraWide)
 
                     let size = CGSize(width: CVPixelBufferGetWidth(validUltraWide),
                                       height: CVPixelBufferGetHeight(validUltraWide))
@@ -348,7 +368,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                                       longFieldOfView: Config.ultraWideLongFieldOfView * .pi / 180)
                     buffer = validUltraWide
                 } else {
-                    cameraImageView.isHidden = true
+                    cameraSampleView.isHidden = true
                     sceneView.isHidden = false
 
                     let imageSize = CGSize(width: CVPixelBufferGetWidth(frame.capturedImage),
@@ -411,10 +431,11 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         }
 
         let camera = frame.camera.transform.columns.3
-        var text = String(format: "%@·%@·r%d f%d·cam %.2f %.2f·menú",
+        var text = String(format: "%@·%@·%dfps·w%d·cam %.2f %.2f·menú",
                           usingUltraWide ? "0.5×" : "1×",
                           tracking,
-                          arkitRuns, frameCount,
+                          Int(smoothedFPS),
+                          hostView.windows.count,
                           Double(camera.x), Double(camera.z))
 
         if let menu = menuWindow {

@@ -83,6 +83,8 @@ final class SpatialWindow {
     var pointsPerMeter: CGFloat = 0
     var currentURL: URL?
 
+    /// El dedo se movió sobre el menú (nil = no hay dedo cerca). dt en segundos.
+    var hoverAt: ((CGPoint?, CGFloat) -> Void)?
     /// Si la ventana es un menú: apretar un botón (en coordenadas del host).
     var pressAt: ((CGPoint) -> Bool)?
     /// El dedo se movió sobre el menú (nil = no hay dedo cerca). dt en segundos.
