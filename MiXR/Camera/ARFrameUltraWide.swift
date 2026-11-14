@@ -1,6 +1,7 @@
 import ARKit
 import CoreVideo
 import Foundation
+import ObjectiveC
 
 /// Acceso al frame de la **cámara ultra gran angular** que ARKit captura por
 /// dentro para tracking, pero que no expone en su API pública.
