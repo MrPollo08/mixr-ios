@@ -1,23 +1,23 @@
-# MiXR — realidad mixta en el iPhone
+# MiXR — realidad mixta con la pantalla de tu PC en el aire
 
 App nativa de iOS que usa la **cámara trasera como ventana al mundo real** y
-pone **ventanas flotantes** encima (videos, páginas web), ancladas al espacio:
-si te movés, las ventanas se quedan donde las dejaste. El control es con
-**tracking de manos** (índice + pulgar) y también con el dedo.
+pone **pantallas flotantes** encima: la pantalla de tu PC en vivo, videos o
+páginas web. Las pantallas quedan ancladas al espacio (si te movés, siguen
+donde las dejaste), se agrandan y se achican, y se pueden **controlar con la
+mano** (hand tracking) como si fueran un mouse.
 
 - **Realidad mixta**: passthrough de cámara con ARKit (6DoF, escala real en metros).
+- **Pantalla del PC**: stream H.264 de baja latencia (VideoToolbox) + mouse virtual.
 - **Hand tracking**: Vision `VNDetectHumanHandPoseRequest`, 21 puntos por mano,
-  hasta 2 manos, dibujo del esqueleto en pantalla.
-- **Ventanas**: video (HLS/MP4 o de tu galería) y navegador web real (`WKWebView`).
-- **Gestos**: pinza sobre una ventana para agarrarla y moverla; dos manos para
-  escalarla. Cada ventana también responde al dedo (arrastrar por la cabecera,
-  pellizcar para escalar, ✕ para cerrar, 🔗 para cambiar la URL).
+  hasta 2 manos, esqueleto dibujado en pantalla.
+- **Ventanas**: PC, video (HLS/MP4 o de tu galería) y navegador web real (`WKWebView`).
 
 ```
 Pinza (índice + pulgar) sobre una ventana  →  la agarra
 Mové la mano                               →  la arrastra por el mundo
 Pinza con las dos manos y separalas        →  agranda
 Pinza con las dos manos y juntalas         →  achica
+Modo Control + pinza                       →  clic en el PC
 ```
 
 ---
@@ -29,7 +29,7 @@ solución es GitHub Actions: un runner macOS compila y publica el archivo.
 
 1. Creá un repositorio en GitHub (puede ser privado) y subí **el contenido de
    esta carpeta** (no la carpeta en sí): `project.yml`, `MiXR/`, `Support/`,
-   `.github/`.
+   `pc/`, `.github/`.
 
    ```bash
    cd MiXR-iOS
@@ -66,107 +66,186 @@ Pasos con Sideloadly (Windows):
    confiá en tu certificado.
 4. En iOS 16+ activá **Modo de desarrollador** (Ajustes → Privacidad y
    seguridad → Modo de desarrollador) y reiniciá.
-5. Abrí la app y aceptá el permiso de cámara.
-
-> **Caveat importante**: con Apple ID gratuito la app deja de abrirse a los
-> 7 días. No es un bug: es el límite de Apple. Se renueva volviendo a firmar.
-> Con cuenta de pago dura 1 año.
+5. Abrí la app y aceptá cámara + red local.
 
 ---
 
-## 2. Uso
+## 2. Ver la pantalla de tu PC (3 pasos)
 
-Al abrir, la app arranca ARKit y muestra la cámara. Abajo tenés la barra:
+### Paso 1 — En el iPhone
+
+Tocá **PC** en la barra de abajo. Aparece una ventana flotante que dice
+`Esperando al PC… 192.168.x.x:47295`. Esa es la IP del iPhone y el puerto.
+
+### Paso 2 — En el PC (mandar la pantalla)
+
+Necesitás `ffmpeg` con `gdigrab` (build estándar de Windows):
+
+```powershell
+winget install Gyan.FFmpeg
+```
+
+Después, doble clic en **`pc\stream-pantalla.bat`** y escribí la IP del iPhone.
+O a mano:
+
+```powershell
+ffmpeg -f gdigrab -framerate 60 -i desktop -vf "scale=-2:1080" `
+  -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -g 60 `
+  -bsf:v dump_extra -flush_packets 1 -f h264 tcp://192.168.x.x:47295
+```
+
+La pantalla aparece en el aire en 1–2 segundos.
+
+| Ajuste | Para qué |
+|---|---|
+| `-framerate 60` | fluidez (bajá a 30 si el Wi-Fi sufre) |
+| `scale=-2:1080` | resolución del stream (720, 1080, 1440…) |
+| `-preset ultrafast` | mínima latencia de codificación |
+| `-g 60` | keyframe por segundo: reconexión rápida |
+
+### Paso 3 — Controlarla con la mano
+
+En el PC, dejá corriendo el receptor de mouse:
+
+```powershell
+python pc\pc_input.py
+```
+
+(sin Python: `powershell -ExecutionPolicy Bypass -File pc\pc_input.ps1`)
+
+En la app tocá **Control** (se pone verde) y listo:
+
+- **El dedo índice mueve el cursor del PC.** Todo el cuadro de la cámara
+  corresponde a toda la pantalla del PC: no hay que apuntar a la ventana.
+- **Pinza (índice + pulgar) = clic izquierdo.** Mantené la pinza y mové la mano
+  para arrastrar.
+- La IP del PC se detecta sola cuando llega el stream; si no, la app te la pide.
+
+> El script necesita que el Firewall de Windows le permita recibir UDP 47300
+> (Windows pregunta la primera vez). Si el juego corre **como administrador**,
+> ejecutá `pc_input.py` también como administrador.
+
+---
+
+## 3. Cosas que podés hacer con las ventanas
 
 | Botón | Qué hace |
 |---|---|
-| **Video** | abre el stream de ejemplo de Apple en una ventana flotante |
-| **Web** | abre `apple.com` en una ventana con navegador real |
-| **Fotos** | elige un video de tu galería y lo abre en una ventana |
-| **Manos** | prende/apaga el tracking (útil si te molesta el esqueleto) |
-| **Limpiar** | cierra todas las ventanas |
-| **🔗** (arriba a la derecha) | escribe una URL: si termina en `.m3u8`/`.mp4` abre video, si no, navegador |
+| **PC** | abre la pantalla del PC (escucha el stream) |
+| **Video** | stream de ejemplo de Apple / cualquier `.m3u8` o `.mp4` |
+| **Web** | navegador real (YouTube, Twitch, docs…) |
+| **Fotos** | elige un video de tu galería |
+| **Manos** | prende/apaga el tracking (y el esqueleto) |
+| **Control** | la mano maneja el mouse del PC |
+| **🗑 / 🔗** (arriba) | cerrar todas las ventanas / abrir una URL a mano |
 
-Cada ventana tiene su cabecera: **🔗** cambia la URL y **✕** la cierra.
-El enlace **funciona con audio**: el video suena por el altavoz del iPhone.
+Cada ventana: **✕** cierra y **🔗** cambia la URL (en la del PC no aparece,
+porque su contenido lo manda el PC).
+
+Tamaño y posición:
+
+- **Con la mano**: pinza sobre la ventana y mové; con las dos manos en pinza,
+  separar/juntar agranda/achica.
+- **Con el dedo**: arrastrá desde la cabecera para moverla, pellizcá con dos
+  dedos sobre la ventana para escalarla.
 
 ---
 
-## 3. Cómo está hecho
+## 4. Cómo está hecho
 
 ```
 project.yml                     proyecto XcodeGen (genera MiXR.xcodeproj)
-Support/Info.plist              permisos (cámara, fotos, ATS), vertical
+Support/Info.plist              permisos (cámara, red local, ATS), vertical
 MiXR/
   App/MiXRApp.swift             entry point SwiftUI
   App/RootView.swift            barra de controles + estado
   App/XRCameraView.swift        puente SwiftUI ↔ UIKit
-  Core/Config.swift             constantes (distancias, tamaños, límites)
-  Core/XRSession.swift          orquesta ARKit + manos + ventanas + galería
+  Core/Config.swift             constantes (distancias, puertos, límites)
+  Core/XRSession.swift          orquesta ARKit + manos + ventanas + control
   Hand/HandTracker.swift        Vision: 21 puntos → pantalla (con suavizado)
-  Hand/HandOverlayView.swift    esqueleto dibujado con CAShapeLayer
+  Hand/HandOverlayView.swift    esqueleto + retícula, CAShapeLayer
   Hand/GestureEngine.swift      pinza → agarrar / escalar ventanas
+  PC/InputClient.swift          UDP de eventos de mouse al PC
+  PC/PointerController.swift    dedo índice + pinza → cursor y clic
+  Stream/H264Assembler.swift    NALs → CMSampleBuffer (VideoToolbox)
+  Stream/H264StreamParser.swift flujo TCP → frames (Annex B o largo+NAL)
+  Stream/StreamServer.swift     NWListener TCP + decodificación
+  Stream/LocalIP.swift          IP Wi-Fi del iPhone (en0)
   Windows/SpatialWindow.swift   modelo: tipo, posición 3D, ancho en metros
   Windows/WindowHostView.swift  proyección mundo→pantalla cada frame
   Windows/SpatialWindowView.swift  tarjeta de cristal + cabecera + gestos
+  Windows/StreamContentView.swift  AVSampleBufferDisplayLayer + ayuda
   Windows/VideoContentView.swift   AVPlayerLayer
   Windows/WebContentView.swift     WKWebView
-.github/workflows/build-ipa.yml  compila y publica el .ipa
+pc/pc_input.py                  mouse virtual (Windows, sin dependencias)
+pc/pc_input.ps1                 lo mismo en PowerShell
+pc/stream-pantalla.bat          lanza ffmpeg apuntando al iPhone
+.github/workflows/build-ipa.yml compila y publica el .ipa
 ```
 
-### La idea matemática
+### Las tres matemáticas
 
-Cada ventana guarda una posición **en metros** en el espacio de ARKit. En cada
-frame se proyecta con `ARCamera.projectPoint` y se calcula cuántos puntos de
-pantalla mide un metro a esa profundidad:
+**1. Ventanas en el mundo.** Cada ventana guarda una posición en metros en el
+espacio de ARKit. En cada frame se proyecta con `ARCamera.projectPoint` y se
+calcula cuántos puntos de pantalla mide un metro a esa profundidad:
 
 ```
 escala = (proyección vertical) * altoPantalla / 2 / profundidad
 anchoEnPantalla = anchoFísico(metros) * escala
 ```
 
-El resultado se aplica como `transform`, así la ventana se ve **más chica
-cuanto más lejos** y se queda quieta en el aire cuando movés el teléfono
-(paralaje real). Al arrastrarla con la mano, los puntos de pantalla se
-convierten de vuelta a metros con esa misma escala.
+Se aplica como `transform`: la ventana se ve más chica cuanto más lejos y se
+queda quieta en el aire cuando movés el teléfono (paralaje real). Al
+arrastrarla, los puntos de pantalla vuelven a metros con esa misma escala.
+
+**2. Manos.** Vision devuelve 21 puntos normalizados; se pasan a coordenadas de
+pantalla con el mismo recorte "aspect fill" que usa la cámara, se suavizan por
+articulación y se calcula la pinza con la fórmula del port de MediaPipe
+(`1 - distancia(pulgar, índice) / tamañoMano / 0.9`, con histéresis).
+
+**3. Mouse.** El índice se mapea a `0…1` del cuadro de cámara y se manda como
+`uint16` en un datagrama UDP al PC, que hace `SetCursorPos`. La pinza manda
+botón abajo/arriba. Si se pierde la mano, se suelta el botón (nunca queda
+pegado).
 
 ---
 
-## 4. Limitaciones honestas
+## 5. Limitaciones honestas
 
-- **Solo vertical**: la app está bloqueada en portrait. Es lo que permite que
-  el mapeo de manos (Vision `.right`) sea exacto sin recalibrar.
-- **Manos sin profundidad**: Vision devuelve 21 puntos 2D; el gesto de pinza se
-  calcula por distancia normalizada al tamaño de la mano (la misma fórmula del
-  port de MediaPipe de VRViewer). La profundidad de la mano no se usa, por eso
-  agarrar funciona mejor de frente y con buena luz.
+- **Solo vertical**: la app está bloqueada en portrait, que es lo que permite
+  que el mapeo de manos (Vision `.right`) sea exacto.
+- **Manos sin profundidad**: Vision da 21 puntos 2D; la pinza se calcula por
+  distancia normalizada. Funciona mejor con buena luz y de frente.
 - **Sin oclusión**: las ventanas se dibujan siempre encima de la cámara; no hay
-  malla del entorno, así que una ventana "detrás" de una mesa se sigue viendo.
-  ARKit sin `planeDetection` no genera malla (ahorra batería). Se puede activar
-  `sceneReconstruction` más adelante.
-- **Hand tracking de Apple, no de visionOS**: en iOS no existe el hand tracking
-  espacial de visionOS; esto es Vision sobre la cámara (funciona bien, pero no
-  es lo mismo que un Vision Pro).
-- **El primer arranque pide cámara** y ARKit tarda ~1 s en enganchar el mundo.
-- **Batería**: cámara + ARKit + Vision a 24 Hz calienta el teléfono.
+  malla del entorno (ARKit sin `planeDetection`, para no gastar batería).
+- **El control es del escritorio, no inyección en juegos**: usa `SetCursorPos` +
+  `mouse_event`. Juegos con anti-cheat o que piden raw input pueden ignorarlo;
+  los que corren como administrador necesitan el script elevado.
+- **Sin audio del PC** todavía (el stream es solo video).
+- **Latencia**: en Wi-Fi 5 GHz ronda 40–80 ms; en 2,4 GHz se nota.
+- **Batería**: cámara + ARKit + Vision a 24 Hz + decodificar video calienta.
+- **7 días**: con Apple ID gratuito la app deja de abrirse a los 7 días. Se
+  renueva volviendo a firmar.
 
 ---
 
-## 5. Problemas típicos
+## 6. Problemas típicos
 
 | Síntoma | Causa / solución |
 |---|---|
-| "Realidad mixta no disponible" | el iPhone es anterior al 6s o el permiso de cámara está denegado |
+| "Esperando al PC…" y no pasa nada | IP equivocada, firewalls, o el PC no está en la misma red |
+| `Connection refused` en ffmpeg | la ventana **PC** no está abierta, o cambió la IP del iPhone |
+| Se ve congelado / pixelado | bajá a `-framerate 30` y `scale=-2:720`, o pasate a 5 GHz |
+| Pantalla negra con el stream conectado | el PC no manda SPS/PPS: agregá `-bsf:v dump_extra` (ya está en el .bat) |
+| El cursor no se mueve | falta `pc_input.py` corriendo, o el Firewall bloquea UDP 47300 |
+| El cursor se mueve pero el clic no | el juego corre como admin → corré el script como admin |
 | Las manos no aparecen | poca luz, mano fuera de cuadro, o botón **Manos** apagado |
-| El esqueleto va corrido | cámara trasera tapada parcialmente / funda que tapa el lente |
-| Las ventanas tiemblan | ARKit perdiendo tracking: más luz y texturas en el piso |
-| El video no carga | URL inválida o sin red; probá el stream de ejemplo |
-| Se cae a los 7 días | firma gratuita de Apple: volvé a firmar con Sideloadly |
+| Las ventanas tiemblan | ARKit perdiendo tracking: más luz y texturas |
 | Build rojo en Actions | mirá el artifact `xcodebuild-log` |
 
 ---
 
-## 6. Compilar con Mac (alternativa)
+## 7. Compilar con Mac (alternativa)
 
 ```bash
 brew install xcodegen

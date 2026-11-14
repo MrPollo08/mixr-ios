@@ -11,9 +11,13 @@ enum Config {
 
     /// Distancia a la que aparecen las ventanas nuevas (metros).
     static let windowDistance: Float = 1.25
+    /// La pantalla del PC un poco más lejos, como un monitor en el escritorio.
+    static let streamDistance: Float = 1.45
 
     /// Ancho físico por defecto de una ventana (metros).
     static let windowWidth: CGFloat = 0.52
+    /// Ancho de la ventana del PC (metros).
+    static let streamWidth: CGFloat = 0.62
 
     /// Límites de tamaño al escalar con las dos manos.
     static let minWindowWidth: CGFloat = 0.22
@@ -23,6 +27,22 @@ enum Config {
     static let minDepth: Float = 0.25
     static let maxDepth: Float = 9.0
 
-    /// Cada cuántos milisegundos se procesa un frame para las manos.
+    /// Cada cuánto se procesa un frame para las manos.
     static let handTrackingInterval: TimeInterval = 1.0 / 24.0
+
+    /// Puerto TCP donde el iPhone escucha el video del PC.
+    static let streamPort: UInt16 = 47295
+    /// Puerto UDP donde el PC escucha el mouse virtual.
+    static let inputPort: UInt16 = 47300
+}
+
+/// Comando que hay que ejecutar en el PC para mandar la pantalla al iPhone.
+enum StreamCommand {
+    static func ffmpeg(ip: String, port: UInt16) -> String {
+        "ffmpeg -f gdigrab -framerate 60 -i desktop "
+            + "-vf \"scale=-2:1080\" "
+            + "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -g 60 "
+            + "-bsf:v dump_extra -flush_packets 1 "
+            + "-f h264 tcp://\(ip):\(port)"
+    }
 }

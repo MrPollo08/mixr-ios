@@ -16,7 +16,7 @@ final class SpatialWindowView: UIView {
     var onPan: ((UIPanGestureRecognizer) -> Void)?
     var onPinch: ((UIPinchGestureRecognizer) -> Void)?
 
-    private let bodyAspect: CGFloat
+    private var bodyAspect: CGFloat
     private let showsLinkButton: Bool
 
     private let card = UIView()
@@ -122,6 +122,14 @@ final class SpatialWindowView: UIView {
         view.frame = contentContainer.bounds
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         contentContainer.addSubview(view)
+    }
+
+    /// Ajusta la proporción del contenido (por ejemplo al tamaño real del
+    /// stream del PC, que no siempre es 16:9).
+    func setAspect(_ aspect: CGFloat) {
+        guard aspect > 0.2, abs(aspect - bodyAspect) > 0.01 else { return }
+        bodyAspect = aspect
+        setNeedsLayout()
     }
 
     // MARK: - Layout

@@ -7,6 +7,7 @@ final class HandOverlayView: UIView {
     private let boneLayer = CAShapeLayer()
     private let jointLayer = CAShapeLayer()
     private let pinchLayer = CAShapeLayer()
+    private let pointerLayer = CAShapeLayer()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -25,7 +26,11 @@ final class HandOverlayView: UIView {
         pinchLayer.strokeColor = UIColor(red: 1.0, green: 0.72, blue: 0.2, alpha: 0.95).cgColor
         pinchLayer.lineWidth = 3
 
-        for shape in [boneLayer, jointLayer, pinchLayer] {
+        pointerLayer.fillColor = UIColor.white.withAlphaComponent(0.95).cgColor
+        pointerLayer.strokeColor = UIColor(red: 0.42, green: 0.86, blue: 1.0, alpha: 0.95).cgColor
+        pointerLayer.lineWidth = 2
+
+        for shape in [boneLayer, jointLayer, pinchLayer, pointerLayer] {
             layer.addSublayer(shape)
         }
     }
@@ -39,6 +44,27 @@ final class HandOverlayView: UIView {
         boneLayer.frame = bounds
         jointLayer.frame = bounds
         pinchLayer.frame = bounds
+        pointerLayer.frame = bounds
+    }
+
+    /// Punto donde está apuntando la mano en modo control (nil = oculto).
+    func setPointer(_ point: CGPoint?) {
+        guard let point else {
+            pointerLayer.path = nil
+            return
+        }
+        let radius: CGFloat = 13
+        let path = UIBezierPath(ovalIn: CGRect(x: point.x - radius, y: point.y - radius,
+                                               width: radius * 2, height: radius * 2))
+        path.move(to: CGPoint(x: point.x - radius - 6, y: point.y))
+        path.addLine(to: CGPoint(x: point.x - radius + 2, y: point.y))
+        path.move(to: CGPoint(x: point.x + radius - 2, y: point.y))
+        path.addLine(to: CGPoint(x: point.x + radius + 6, y: point.y))
+        path.move(to: CGPoint(x: point.x, y: point.y - radius - 6))
+        path.addLine(to: CGPoint(x: point.x, y: point.y - radius + 2))
+        path.move(to: CGPoint(x: point.x, y: point.y + radius - 2))
+        path.addLine(to: CGPoint(x: point.x, y: point.y + radius + 6))
+        pointerLayer.path = path.cgPath
     }
 
     func render(poses: [HandPose]) {

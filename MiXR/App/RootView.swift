@@ -52,22 +52,28 @@ struct RootView: View {
 
             Spacer()
 
-            Button {
-                session.openURLPrompt()
-            } label: {
-                Image(systemName: "link")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(width: 32, height: 28)
-                    .background(Capsule().fill(Color.black.opacity(0.45)))
-            }
+            iconButton("trash") { session.closeAllWindows() }
+            iconButton("link") { session.openURLPrompt() }
         }
     }
 
+    private func iconButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(.white)
+                .frame(width: 32, height: 28)
+                .background(Capsule().fill(Color.black.opacity(0.45)))
+        }
+        .buttonStyle(.plain)
+    }
+
     private var hint: some View {
-        Text("Pinza índice + pulgar para agarrar y mover · dos manos separadas para escalar")
+        Text(session.controlMode
+             ? "CONTROL DEL PC · el índice mueve el cursor · pinza = clic"
+             : "Pinza índice + pulgar para agarrar y mover · dos manos para escalar")
             .font(.system(size: 10, weight: .medium))
-            .foregroundColor(.white.opacity(0.55))
+            .foregroundColor(session.controlMode ? .green : .white.opacity(0.55))
             .multilineTextAlignment(.center)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -77,7 +83,10 @@ struct RootView: View {
     // MARK: - Controles
 
     private var controlBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 7) {
+            glassButton("display", "PC") {
+                session.addPCWindow()
+            }
             glassButton("play.rectangle.fill", "Video") {
                 session.addVideoWindow(url: Config.sampleVideoURL)
             }
@@ -90,11 +99,11 @@ struct RootView: View {
             glassButton(session.handsVisible ? "hand.raised.fill" : "hand.raised.slash", "Manos") {
                 session.toggleHands()
             }
-            glassButton("trash", "Limpiar") {
-                session.closeAllWindows()
+            glassButton("cursorarrow", "Control", active: session.controlMode) {
+                session.toggleControlMode()
             }
         }
-        .padding(8)
+        .padding(7)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(.ultraThinMaterial)
@@ -105,20 +114,24 @@ struct RootView: View {
         )
     }
 
-    private func glassButton(_ symbol: String, _ title: String, action: @escaping () -> Void) -> some View {
+    private func glassButton(_ symbol: String, _ title: String,
+                             active: Bool = false,
+                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 4) {
                 Image(systemName: symbol)
                     .font(.system(size: 15, weight: .semibold))
                 Text(title)
                     .font(.system(size: 9, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
-            .foregroundColor(.white)
+            .foregroundColor(active ? .black : .white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .fill(Color.white.opacity(0.08))
+                    .fill(active ? Color.green : Color.white.opacity(0.08))
             )
         }
         .buttonStyle(.plain)

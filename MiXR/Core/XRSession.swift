@@ -17,6 +17,10 @@ final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerVi
     @Published var windowCount = 0
     @Published var handsVisible = true
     @Published var unsupportedMessage: String?
+    /// Modo control: la mano maneja el mouse del PC en vez de mover ventanas.
+    @Published var controlMode = false
+    /// IP del PC conectado (se detecta sola cuando llega el stream).
+    @Published var pcHost: String?
 
     // MARK: - Vistas de UIKit
 
@@ -27,6 +31,7 @@ final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerVi
     private let arSession = ARSession()
     private let tracker = HandTracker()
     private let gestures = GestureEngine()
+    let pointer = PointerController()
     private var isRunning = false
 
     /// Contenedor único que se entrega a SwiftUI.
@@ -117,7 +122,14 @@ final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerVi
     private func apply(_ poses: [HandPose]) {
         overlay.render(poses: poses)
         if handCount != poses.count { handCount = poses.count }
-        gestures.update(poses: poses, host: hostView)
+
+        if controlMode {
+            // La mano es el mouse del PC: no se tocan las ventanas.
+            overlay.setPointer(pointer.update(poses: poses, viewport: overlay.bounds.size))
+        } else {
+            overlay.setPointer(nil)
+            gestures.update(poses: poses, host: hostView)
+        }
     }
 
     func session(_ session: ARSession, didFailWithError error: Error) {
@@ -140,8 +152,16 @@ final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerVi
         add(kind: .web(url), width: Config.windowWidth)
     }
 
+    /// Abre la ventana de la pantalla del PC (y empieza a escuchar el stream).
+    func addPCWindow(port: UInt16 = Config.streamPort) {
+        let position = positionInFrontOfCamera(index: hostView.windows.count,
+                                               distance: Config.streamDistance)
+        hostView.add(kind: .pcStream(port: port), position: position, physicalWidth: Config.streamWidth)
+    }
+
     private func add(kind: WindowKind, width: CGFloat) {
-        let position = positionInFrontOfCamera(index: hostView.windows.count)
+        let position = positionInFrontOfCamera(index: hostView.windows.count,
+                                               distance: Config.windowDistance)
         hostView.add(kind: kind, position: position, physicalWidth: width)
     }
 
@@ -160,7 +180,7 @@ final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerVi
     }
 
     /// Posición nueva delante de la cámara, escalonada para que no se tapen.
-    private func positionInFrontOfCamera(index: Int) -> simd_float3 {
+    private func positionInFrontOfCamera(index: Int, distance: Float) -> simd_float3 {
         let transform = arSession.currentFrame?.camera.transform ?? matrix_identity_float4x4
         let right = simd_float3(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
         let up = simd_float3(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
@@ -170,7 +190,49 @@ final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerVi
         let column = Float(index % 2) * 0.62 - 0.31
         let row = Float((index / 2) % 3) * 0.36
 
-        return origin + right * column + up * (row - 0.12) - back * Config.windowDistance
+        return origin + right * column + up * (row - 0.12) - back * distance
+    }
+
+    // MARK: - Modo control (mano = mouse del PC)
+
+    func toggleControlMode() {
+        controlMode.toggle()
+        pointer.setEnabled(controlMode)
+        gestures.reset()
+        overlay.setPointer(nil)
+
+        if controlMode {
+            if let host = pcHost {
+                pointer.client.connect(host: host)
+            } else {
+                requestPCHost()
+            }
+        }
+    }
+
+    /// El stream avisa desde qué IP viene el PC: con eso alcanza para el mouse.
+    func pcConnected(host: String) {
+        pcHost = host
+        pointer.client.connect(host: host)
+    }
+
+    private func requestPCHost() {
+        promptForText(title: "IP del PC",
+                      message: "IP de tu PC en la misma Wi-Fi. En el PC corré pc_input.py (escucha en UDP \(Config.inputPort)).",
+                      placeholder: "192.168.0.10",
+                      current: pcHost) { [weak self] text in
+            guard let self, let host = Self.normalizeHost(text) else { return }
+            self.pcConnected(host: host)
+        }
+    }
+
+    static func normalizeHost(_ text: String) -> String? {
+        var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        value = value.replacingOccurrences(of: "udp://", with: "")
+        if let colon = value.firstIndex(of: ":") {
+            value = String(value[value.startIndex..<colon])
+        }
+        return value.isEmpty ? nil : value
     }
 
     // MARK: - Elegir video de la galería
@@ -218,20 +280,30 @@ final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerVi
     }
 
     func promptForURL(title: String, message: String, current: URL?, onAccept: @escaping (URL) -> Void) {
+        promptForText(title: title, message: message, placeholder: "https://…",
+                      current: current?.absoluteString) { text in
+            guard let url = Self.normalize(text) else { return }
+            onAccept(url)
+        }
+    }
+
+    func promptForText(title: String, message: String, placeholder: String,
+                       current: String?, onAccept: @escaping (String) -> Void) {
         guard let presenter = topViewController() else { return }
 
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addTextField { field in
-            field.text = current?.absoluteString
+            field.text = current
+            field.placeholder = placeholder
             field.keyboardType = .URL
             field.autocapitalizationType = .none
             field.autocorrectionType = .no
             field.clearButtonMode = .whileEditing
         }
         alert.addAction(UIAlertAction(title: "Cancelar", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Abrir", style: .default) { _ in
-            guard let text = alert.textFields?.first?.text, let url = Self.normalize(text) else { return }
-            onAccept(url)
+        alert.addAction(UIAlertAction(title: "Aceptar", style: .default) { _ in
+            guard let text = alert.textFields?.first?.text else { return }
+            onAccept(text)
         })
         presenter.present(alert, animated: true)
     }

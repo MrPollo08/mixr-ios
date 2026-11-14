@@ -40,6 +40,8 @@
 	<string>La cámara se usa para ver el mundo real (realidad mixta) y para el seguimiento de tus manos con Vision. El video nunca sale del dispositivo.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Para elegir un video de tu galería y abrirlo en una ventana flotante.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>MiXR se conecta con tu PC en la misma Wi-Fi para mostrar su pantalla y controlar el mouse.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>Se usa el movimiento del teléfono para anclar las ventanas al mundo real.</string>
 	<key>NSAppTransportSecurity</key>

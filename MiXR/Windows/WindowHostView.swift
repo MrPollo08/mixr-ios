@@ -32,7 +32,7 @@ final class WindowHostView: UIView {
     func add(kind: WindowKind, position: simd_float3, physicalWidth: CGFloat) -> SpatialWindow {
         let view = SpatialWindowView(title: kind.title,
                                      bodyAspect: kind.aspect,
-                                     showsLinkButton: true)
+                                     showsLinkButton: kind.showsLinkButton)
         view.isHidden = true
 
         let window = SpatialWindow(kind: kind,
@@ -40,7 +40,19 @@ final class WindowHostView: UIView {
                                    physicalWidth: physicalWidth,
                                    view: view)
 
-        view.setContent(kind.makeContent())
+        let content = kind.makeContent()
+        view.setContent(content)
+
+        if let stream = content as? StreamContentView {
+            stream.onVideoSize = { [weak self, weak window] size in
+                guard let self, let window, size.height > 0 else { return }
+                window.view.setAspect(size.width / size.height)
+                self.layoutWindow(window)
+            }
+            stream.onRemoteHost = { [weak self] host in
+                self?.session?.pcConnected(host: host)
+            }
+        }
 
         view.onClose = { [weak self, weak window] in
             guard let self, let window else { return }

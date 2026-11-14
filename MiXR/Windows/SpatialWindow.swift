@@ -6,11 +6,14 @@ import simd
 enum WindowKind {
     case video(URL?)
     case web(URL)
+    /// Pantalla del PC por streaming (H.264) + mouse virtual.
+    case pcStream(port: UInt16)
 
     var initialURL: URL? {
         switch self {
         case .video(let url): return url
         case .web(let url): return url
+        case .pcStream: return nil
         }
     }
 
@@ -18,6 +21,7 @@ enum WindowKind {
         switch self {
         case .video: return "Video"
         case .web: return "Web"
+        case .pcStream: return "Pantalla del PC"
         }
     }
 
@@ -26,6 +30,15 @@ enum WindowKind {
         switch self {
         case .video: return 16.0 / 9.0
         case .web: return 1.0
+        case .pcStream: return 16.0 / 9.0
+        }
+    }
+
+    /// Solo video y web tienen un enlace editable.
+    var showsLinkButton: Bool {
+        switch self {
+        case .video, .web: return true
+        case .pcStream: return false
         }
     }
 
@@ -33,6 +46,7 @@ enum WindowKind {
         switch self {
         case .video(let url): return VideoContentView(url: url)
         case .web(let url): return WebContentView(url: url)
+        case .pcStream(let port): return StreamContentView(port: port)
         }
     }
 }
