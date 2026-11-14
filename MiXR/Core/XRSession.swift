@@ -9,7 +9,7 @@ import simd
 
 /// Orquesta todo: ARKit (cámara del mundo real + posición en el espacio),
 /// tracking de manos con Vision y las ventanas flotantes ancladas al mundo.
-final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerViewControllerDelegate {
+final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegate {
 
     // MARK: - Estado que consume SwiftUI
 
@@ -33,6 +33,7 @@ final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerVi
     private let gestures = GestureEngine()
     let pointer = PointerController()
     private var isRunning = false
+    private var displayLink: CADisplayLink?
 
     /// Contenedor único que se entrega a SwiftUI.
     lazy var containerView: UIView = {
@@ -66,6 +67,30 @@ final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerVi
             return
         }
 
+        requestCameraPermission { [weak self] granted in
+            guard let self else { return }
+            guard granted else {
+                self.unsupportedMessage = "Falta el permiso de cámara. Activalo en Ajustes → MiXR."
+                return
+            }
+            self.beginARKit()
+        }
+    }
+
+    private func requestCameraPermission(_ completion: @escaping (Bool) -> Void) {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            completion(true)
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                DispatchQueue.main.async { completion(granted) }
+            }
+        default:
+            completion(false)
+        }
+    }
+
+    private func beginARKit() {
         let configuration = ARWorldTrackingConfiguration()
         configuration.worldAlignment = .gravity
         configuration.planeDetection = []
@@ -73,7 +98,6 @@ final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerVi
         configuration.environmentTexturing = .none
 
         sceneView.session = arSession
-        sceneView.delegate = self
         sceneView.automaticallyUpdatesLighting = false
         sceneView.antialiasingMode = .none
         sceneView.preferredFramesPerSecond = 60
@@ -81,12 +105,21 @@ final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerVi
         arSession.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         isRunning = true
 
+        // Se leen los frames con un display link en vez de con el delegate del
+        // ARSession: `ARSCNView` necesita quedarse con ese delegate para pintar
+        // la cámara, y así no hay conflicto.
+        let link = CADisplayLink(target: self, selector: #selector(tick))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+
         configureAudio()
         UIApplication.shared.isIdleTimerDisabled = true
     }
 
     func pause() {
         guard isRunning else { return }
+        displayLink?.invalidate()
+        displayLink = nil
         arSession.pause()
         isRunning = false
         UIApplication.shared.isIdleTimerDisabled = false
@@ -101,20 +134,18 @@ final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerVi
         }
     }
 
-    // MARK: - ARSessionDelegate
+    // MARK: - Frames
 
-    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+    @objc private func tick() {
+        guard isRunning, let frame = arSession.currentFrame else { return }
         let camera = frame.camera
         let viewport = containerView.bounds.size
-        guard viewport.width > 1 else { return }
+        guard viewport.width > 1, viewport.height > 1 else { return }
 
-        DispatchQueue.main.async { [weak self] in
-            self?.hostView.layout(camera: camera, viewportSize: viewport)
-        }
+        hostView.layout(camera: camera, viewportSize: viewport)
 
         guard handsVisible else { return }
-        let image = frame.capturedImage
-        tracker.submit(pixelBuffer: image, viewportSize: viewport) { [weak self] poses in
+        tracker.submit(pixelBuffer: frame.capturedImage, viewportSize: viewport) { [weak self] poses in
             DispatchQueue.main.async { self?.apply(poses) }
         }
     }
@@ -130,16 +161,6 @@ final class XRSession: NSObject, ObservableObject, ARSCNViewDelegate, PHPickerVi
             overlay.setPointer(nil)
             gestures.update(poses: poses, host: hostView)
         }
-    }
-
-    func session(_ session: ARSession, didFailWithError error: Error) {
-        DispatchQueue.main.async { [weak self] in
-            self?.unsupportedMessage = error.localizedDescription
-        }
-    }
-
-    func sessionWasInterrupted(_ session: ARSession) {
-        // Al volver de una interrupción ARKit reanuda solo.
     }
 
     // MARK: - Ventanas
