@@ -154,7 +154,10 @@ final class WindowHostView: UIView {
         let targetWidth = window.physicalWidth * pointsPerMeter
         let scale = targetWidth / window.view.baseSize.width
         window.view.transform = CGAffineTransform(scaleX: scale, y: scale)
-        window.view.alpha = min(1, max(0.35, 1.35 - depth * 0.09))
+
+        // Se atenúa un poco con la distancia (efecto de profundidad).
+        let fade = CGFloat(1.35 - depth * 0.09)
+        window.view.alpha = min(1, max(0.35, fade))
     }
 
     // MARK: - Interacción con el dedo (respaldo del tracking de manos)
