@@ -82,6 +82,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private var displayLink: CADisplayLink?
     private var lastPose: CameraPose?
     private var lastHands: [HandPose] = []
+    private weak var menuWindow: SpatialWindow?
 
     /// Contenedor único que se entrega a SwiftUI.
     lazy var containerView: UIView = {
@@ -166,6 +167,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         }
 
         applyModeVisibility()
+        ensureMenu()
 
         // Los frames se leen acá (no con el delegate de ARSession) para no
         // pelearse con ARSCNView, que necesita quedarse con ese delegate.
@@ -231,9 +233,58 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         applyModeVisibility()
     }
 
-    /// Toma la orientación actual como "adelante" (solo modo gran angular).
+    /// Toma la orientación actual como "adelante" y trae el menú delante tuyo.
     func recenterView() {
-        wideView.recenter()
+        switch cameraMode {
+        case .ultraWide:
+            wideView.recenter()
+            placeMenuFront(transform: matrix_identity_float4x4)
+        case .arkit:
+            placeMenuFront(transform: lastPose?.transform ?? matrix_identity_float4x4)
+        }
+    }
+
+    // MARK: - Menú flotante
+
+    private func ensureMenu() {
+        if let existing = menuWindow, hostView.windows.contains(where: { $0 === existing }) {
+            return
+        }
+        let position = positionInFrontOfCamera(index: 0, distance: Config.menuDistance)
+        let window = hostView.add(kind: .menu, position: position, physicalWidth: Config.menuWidth)
+        menuWindow = window
+
+        (window.view.content as? MenuContentView)?.onAction = { [weak self] action in
+            self?.handleMenu(action)
+        }
+    }
+
+    private func placeMenuFront(transform: simd_float4x4) {
+        guard let menu = menuWindow else {
+            ensureMenu()
+            return
+        }
+        let position = positionInFrontOfCamera(index: 0,
+                                               distance: Config.menuDistance,
+                                               transform: transform)
+        hostView.setPosition(menu, position)
+        hostView.bringToFront(menu)
+    }
+
+    private func handleMenu(_ action: MenuAction) {
+        switch action {
+        case .pc: addPCWindow()
+        case .youtube: addWebWindow(url: Config.youtubeURL)
+        case .video: addVideoWindow(url: Config.sampleVideoURL)
+        case .photos: pickVideo()
+        case .web: addWebWindow(url: Config.defaultWebURL)
+        case .control: toggleControlMode()
+        case .hands: toggleHands()
+        case .occlusion: toggleOcclusion()
+        case .camera: toggleCameraMode()
+        case .recenter: recenterView()
+        case .clear: closeAllWindows()
+        }
     }
 
     // MARK: - Frames
@@ -287,6 +338,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         if handCount != poses.count { handCount = poses.count }
 
         if controlMode {
+            // Si el dedo está sobre el menú, el gesto es del menú y no del PC.
+            if let tip = poses.first.map({ $0.joints[.indexTip] ?? $0.pinchPoint }),
+               let target = hostView.window(at: tip),
+               target.pressAt != nil {
+                overlay.setPointer(nil)
+                gestures.update(poses: poses, host: hostView)
+                return
+            }
             // La mano es el mouse del PC: no se tocan las ventanas.
             overlay.setPointer(pointer.update(poses: poses, viewport: overlay.bounds.size))
         } else {
@@ -316,7 +375,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     }
 
     func closeAllWindows() {
-        hostView.removeAll()
+        hostView.removeAll(except: menuWindow)
     }
 
     func toggleHands() {
@@ -333,8 +392,11 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     }
 
     /// Posición nueva delante de la cámara, escalonada para que no se tapen.
-    private func positionInFrontOfCamera(index: Int, distance: Float) -> simd_float3 {
-        let transform = lastPose?.transform
+    private func positionInFrontOfCamera(index: Int,
+                                         distance: Float,
+                                         transform override: simd_float4x4? = nil) -> simd_float3 {
+        let transform = override
+            ?? lastPose?.transform
             ?? arSession.currentFrame?.camera.transform
             ?? matrix_identity_float4x4
 

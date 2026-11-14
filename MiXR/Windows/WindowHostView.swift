@@ -31,7 +31,8 @@ final class WindowHostView: UIView {
     func add(kind: WindowKind, position: simd_float3, physicalWidth: CGFloat) -> SpatialWindow {
         let view = SpatialWindowView(title: kind.title,
                                      bodyAspect: kind.aspect,
-                                     showsLinkButton: kind.showsLinkButton)
+                                     showsLinkButton: kind.showsLinkButton,
+                                     showsCloseButton: kind.showsCloseButton)
         view.isHidden = true
 
         let window = SpatialWindow(kind: kind,
@@ -50,6 +51,21 @@ final class WindowHostView: UIView {
             }
             stream.onRemoteHost = { [weak self] host in
                 self?.session?.pcConnected(host: host)
+            }
+        }
+
+        if let menu = content as? MenuContentView {
+            window.pressAt = { [weak self, weak menu, weak view] point in
+                guard let self, let menu, let view else { return false }
+                return menu.press(atLocal: view.convert(point, from: self))
+            }
+            window.hoverAt = { [weak self, weak menu, weak view] point in
+                guard let self, let menu, let view else { return }
+                guard let point else {
+                    menu.setHover(atLocal: nil)
+                    return
+                }
+                menu.setHover(atLocal: view.convert(point, from: self))
             }
         }
 
@@ -93,11 +109,11 @@ final class WindowHostView: UIView {
         onCountChanged?(windows.count)
     }
 
-    func removeAll() {
-        for window in windows {
+    func removeAll(except keep: SpatialWindow? = nil) {
+        for window in windows where window !== keep {
             window.view.removeFromSuperview()
         }
-        windows.removeAll()
+        windows.removeAll { $0 !== keep }
         onCountChanged?(windows.count)
     }
 

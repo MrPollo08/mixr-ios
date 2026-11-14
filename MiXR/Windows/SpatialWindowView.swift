@@ -18,6 +18,7 @@ final class SpatialWindowView: UIView {
 
     private var bodyAspect: CGFloat
     private let showsLinkButton: Bool
+    private let showsCloseButton: Bool
 
     private let card = UIView()
     private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
@@ -36,9 +37,10 @@ final class SpatialWindowView: UIView {
                height: Self.baseWidth / bodyAspect + Self.headerHeight)
     }
 
-    init(title: String, bodyAspect: CGFloat, showsLinkButton: Bool) {
+    init(title: String, bodyAspect: CGFloat, showsLinkButton: Bool, showsCloseButton: Bool = true) {
         self.bodyAspect = bodyAspect
         self.showsLinkButton = showsLinkButton
+        self.showsCloseButton = showsCloseButton
         super.init(frame: CGRect(x: 0, y: 0,
                                  width: Self.baseWidth,
                                  height: Self.baseWidth / bodyAspect + Self.headerHeight))
@@ -90,6 +92,7 @@ final class SpatialWindowView: UIView {
         style(button: closeButton, symbol: "xmark")
         style(button: linkButton, symbol: "link")
         linkButton.isHidden = !showsLinkButton
+        closeButton.isHidden = !showsCloseButton
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
         linkButton.addTarget(self, action: #selector(linkTapped), for: .touchUpInside)
         header.addSubview(closeButton)

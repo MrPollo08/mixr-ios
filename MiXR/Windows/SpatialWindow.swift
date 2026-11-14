@@ -8,12 +8,14 @@ enum WindowKind {
     case web(URL)
     /// Pantalla del PC por streaming (H.264) + mouse virtual.
     case pcStream(port: UInt16)
+    /// Menú flotante de la app (se aprieta con la pinza).
+    case menu
 
     var initialURL: URL? {
         switch self {
         case .video(let url): return url
         case .web(let url): return url
-        case .pcStream: return nil
+        case .pcStream, .menu: return nil
         }
     }
 
@@ -22,6 +24,7 @@ enum WindowKind {
         case .video: return "Video"
         case .web: return "Web"
         case .pcStream: return "Pantalla del PC"
+        case .menu: return "MiXR"
         }
     }
 
@@ -31,6 +34,7 @@ enum WindowKind {
         case .video: return 16.0 / 9.0
         case .web: return 1.0
         case .pcStream: return 16.0 / 9.0
+        case .menu: return 1.45
         }
     }
 
@@ -38,7 +42,15 @@ enum WindowKind {
     var showsLinkButton: Bool {
         switch self {
         case .video, .web: return true
-        case .pcStream: return false
+        case .pcStream, .menu: return false
+        }
+    }
+
+    /// El menú no se puede cerrar: es la página principal.
+    var showsCloseButton: Bool {
+        switch self {
+        case .menu: return false
+        default: return true
         }
     }
 
@@ -47,6 +59,7 @@ enum WindowKind {
         case .video(let url): return VideoContentView(url: url)
         case .web(let url): return WebContentView(url: url)
         case .pcStream(let port): return StreamContentView(port: port)
+        case .menu: return MenuContentView()
         }
     }
 }
@@ -69,6 +82,11 @@ final class SpatialWindow {
     /// Lo recalcula WindowHostView en cada frame.
     var pointsPerMeter: CGFloat = 0
     var currentURL: URL?
+
+    /// Si la ventana es un menú: apretar un botón (en coordenadas del host).
+    var pressAt: ((CGPoint) -> Bool)?
+    /// Resaltar el botón bajo el dedo (nil = ningún dedo cerca).
+    var hoverAt: ((CGPoint?) -> Void)?
 
     init(kind: WindowKind, position: simd_float3, physicalWidth: CGFloat, view: SpatialWindowView) {
         self.kind = kind

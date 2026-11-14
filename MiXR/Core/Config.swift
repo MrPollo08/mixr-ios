@@ -42,6 +42,12 @@ enum Config {
 
     /// Cadencia de la cámara gran angular (frames por segundo).
     static let wideCameraFPS: Int32 = 30
+
+    /// Menú flotante: a qué distancia y qué ancho (metros).
+    static let menuDistance: Float = 1.15
+    static let menuWidth: CGFloat = 0.88
+
+    static let youtubeURL = URL(string: "https://m.youtube.com")!
 }
 
 /// Comando que hay que ejecutar en el PC para mandar la pantalla al iPhone.

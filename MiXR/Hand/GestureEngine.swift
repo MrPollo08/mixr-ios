@@ -71,8 +71,9 @@ final class GestureEngine {
             latch[key] = nil
         }
 
-        // 2. Sin ventana agarrada: ver si la pinza cae sobre alguna.
+        // 2. Sin ventana agarrada: resaltar el menú y ver si la pinza cae en algo.
         guard let window = grabbed else {
+            updateHover(poses: poses, host: host)
             if let first = pinching.first, let target = host.window(at: dragPoint(first)) {
                 begin(window: target, with: first, host: host)
             }
@@ -171,6 +172,12 @@ final class GestureEngine {
 
     private func begin(window: SpatialWindow, with hand: HandPose, host: WindowHostView) {
         let point = dragPoint(hand)
+
+        // Si es el menú y la pinza cayó en un tile: apretar, no arrastrar.
+        if let press = window.pressAt, press(point) {
+            return
+        }
+
         let zone = host.grabZone(for: window, at: point)
 
         grabbed = window
@@ -207,6 +214,13 @@ final class GestureEngine {
         dragKey = nil
         twoHandResize = false
         depthRatio = 1
+    }
+
+    /// Resalta el tile del menú que está debajo del dedo (sin apretar).
+    private func updateHover(poses: [HandPose], host: WindowHostView) {
+        guard let menu = host.windows.first(where: { $0.pressAt != nil }) else { return }
+        let tip: CGPoint? = poses.first.map { $0.joints[.indexTip] ?? $0.pinchPoint }
+        menu.hoverAt?(tip)
     }
 
     /// Punto de control: la yema del índice (estable) y si no, la pinza.
