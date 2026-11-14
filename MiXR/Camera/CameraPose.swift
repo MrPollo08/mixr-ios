@@ -6,8 +6,8 @@ import simd
 
 /// Pose de cámara unificada, ya expresada en el marco de la **pantalla**.
 ///
-/// Sirve para los dos modos: ARKit (6DoF real) y gran angular con CoreMotion
-/// (3DoF). Todo el layout de las ventanas pasa por acá.
+/// Sirve para los tres caminos: ARKit con su cámara, ARKit con la ultra gran
+/// angular (6DoF + más campo) y gran angular con CoreMotion (3DoF).
 struct CameraPose {
 
     /// Cámara → mundo, con x derecha, y arriba, z hacia atrás (mira a -z).
@@ -42,7 +42,7 @@ struct CameraPose {
 
     // MARK: - Constructores
 
-    /// ARKit: usa la proyección propia de la cámara (6DoF, anclado al mundo).
+    /// ARKit con su cámara: usa la proyección propia de la cámara (6DoF).
     init(arkitCamera camera: ARCamera,
          orientation: UIInterfaceOrientation,
          viewport: CGSize,
@@ -55,7 +55,27 @@ struct CameraPose {
         self.imageAspect = ScreenOrientation.displayAspect(raw: imageSize, orientation: orientation)
     }
 
-    /// Gran angular: rotación de CoreMotion + campo de visión conocido (3DoF).
+    /// Pose de ARKit (6DoF) pero con la imagen de la **ultra gran angular**.
+    /// Anclaje real + mucho más campo de visión.
+    init(cameraTransform: simd_float4x4,
+         orientation: UIInterfaceOrientation,
+         viewport: CGSize,
+         imageSize: CGSize,
+         longFieldOfView: CGFloat) {
+        let screen = ScreenOrientation.screenRotation(for: orientation)
+        self.transform = cameraTransform * screen
+
+        let display = ScreenOrientation.displaySize(raw: imageSize, orientation: orientation)
+        let fill = max(viewport.width / display.width, viewport.height / display.height)
+        let focalPixels = (max(imageSize.width, imageSize.height) / 2) / tan(max(longFieldOfView, 0.3) / 2)
+
+        self.focalX = focalPixels * fill
+        self.focalY = focalPixels * fill
+        self.viewport = viewport
+        self.imageAspect = display.width / display.height
+    }
+
+    /// Gran angular sin ARKit: rotación de CoreMotion (3DoF).
     init(rotation: simd_quatf,
          orientation: UIInterfaceOrientation,
          viewport: CGSize,

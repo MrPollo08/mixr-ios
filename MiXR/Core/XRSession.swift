@@ -66,6 +66,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     // MARK: - Vistas de UIKit
 
     let sceneView = ARSCNView()
+    let cameraImageView = CameraImageView()
     let wideView = WideCameraView()
     let hostView = WindowHostView()
     let occlusionView = HandOcclusionView()
@@ -82,6 +83,10 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private var lastHands: [HandPose] = []
     private weak var menuWindow: SpatialWindow?
 
+    /// Diagnóstico en pantalla (posición de la cámara y estado del tracking).
+    @Published var debugText = ""
+    private var lastDebugAt: CFTimeInterval = 0
+
     /// Contenedor único que se entrega a SwiftUI.
     lazy var containerView: UIView = {
         let view = UIView(frame: .zero)
@@ -89,13 +94,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         view.clipsToBounds = true
 
         // De abajo a arriba: cámara, ventanas, manos (oclusión), esqueleto.
-        let stack: [UIView] = [sceneView, wideView, hostView, occlusionView, overlay]
+        let stack: [UIView] = [cameraImageView, sceneView, wideView, hostView, occlusionView, overlay]
         for subview in stack {
             subview.frame = view.bounds
             subview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             view.addSubview(subview)
         }
 
+        cameraImageView.isHidden = true
         sceneView.isUserInteractionEnabled = false
         wideView.isUserInteractionEnabled = false
         occlusionView.isUserInteractionEnabled = false
@@ -198,10 +204,10 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     }
 
     private func applyModeVisibility() {
-        sceneView.isHidden = cameraMode != .arkit
         wideView.isHidden = cameraMode != .ultraWide
         occlusionView.isHidden = !occlusionEnabled
         if occlusionView.isHidden { occlusionView.clear() }
+        // sceneView / cameraImageView los decide el tick según qué imagen llegue.
     }
 
     // MARK: - Cambiar de cámara / oclusión
@@ -298,13 +304,37 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         switch cameraMode {
         case .arkit:
             if let frame = arSession.currentFrame {
-                let imageSize = CGSize(width: CVPixelBufferGetWidth(frame.capturedImage),
-                                       height: CVPixelBufferGetHeight(frame.capturedImage))
-                pose = CameraPose(arkitCamera: frame.camera,
-                                  orientation: orientation,
-                                  viewport: viewport,
-                                  imageSize: imageSize)
-                buffer = frame.capturedImage
+                let ultraWide = ARFrameUltraWide.pixelBuffer(from: frame)
+                let validUltraWide = ultraWide.flatMap { Self.isUsable($0) ? $0 : nil }
+
+                if let validUltraWide {
+                    // 6DoF de ARKit + imagen de la 0.5×, dibujada por nosotros.
+                    cameraImageView.isHidden = false
+                    sceneView.isHidden = true
+                    cameraImageView.update(buffer: validUltraWide, orientation: orientation)
+
+                    let size = CGSize(width: CVPixelBufferGetWidth(validUltraWide),
+                                      height: CVPixelBufferGetHeight(validUltraWide))
+                    pose = CameraPose(cameraTransform: frame.camera.transform,
+                                      orientation: orientation,
+                                      viewport: viewport,
+                                      imageSize: size,
+                                      longFieldOfView: Config.ultraWideLongFieldOfView * .pi / 180)
+                    buffer = validUltraWide
+                } else {
+                    cameraImageView.isHidden = true
+                    sceneView.isHidden = false
+
+                    let imageSize = CGSize(width: CVPixelBufferGetWidth(frame.capturedImage),
+                                           height: CVPixelBufferGetHeight(frame.capturedImage))
+                    pose = CameraPose(arkitCamera: frame.camera,
+                                      orientation: orientation,
+                                      viewport: viewport,
+                                      imageSize: imageSize)
+                    buffer = frame.capturedImage
+                }
+
+                updateDebug(frame: frame, usingUltraWide: validUltraWide != nil)
             }
 
         case .ultraWide:
@@ -327,6 +357,39 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                        orientation: ScreenOrientation.visionOrientation(for: orientation)) { [weak self] poses in
             DispatchQueue.main.async { self?.apply(poses) }
         }
+    }
+
+    /// Solo aceptamos buffers con tamaño y formato razonables.
+    private static func isUsable(_ buffer: CVPixelBuffer) -> Bool {
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        return width >= 320 && height >= 240 && CVPixelBufferGetPixelFormatType(buffer) != 0
+    }
+
+    private func updateDebug(frame: ARFrame, usingUltraWide: Bool) {
+        let now = CACurrentMediaTime()
+        guard now - lastDebugAt > 0.25 else { return }
+        lastDebugAt = now
+
+        let tracking: String
+        switch frame.camera.trackingState {
+        case .normal: tracking = "OK"
+        case .notAvailable: tracking = "SIN TRACKING"
+        case .limited(let reason): tracking = "LIMITADO(\(reason))"
+        }
+
+        let camera = frame.camera.transform.columns.3
+        var text = String(format: "%@ · %@ · cam %.2f %.2f %.2f",
+                          usingUltraWide ? "0.5×" : "1×",
+                          tracking,
+                          Double(camera.x), Double(camera.y), Double(camera.z))
+
+        if let menu = menuWindow {
+            let position = menu.position
+            text += String(format: " · menú %.2f %.2f %.2f",
+                           Double(position.x), Double(position.y), Double(position.z))
+        }
+        debugText = text
     }
 
     private func apply(_ poses: [HandPose]) {

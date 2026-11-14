@@ -26,6 +26,15 @@ struct RootView: View {
 
                 Spacer(minLength: 0)
 
+                HStack {
+                    Spacer(minLength: 0)
+                    Text(session.debugText)
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.45))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                }
+
                 Text(hintText)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundColor(session.controlMode ? .green : .white.opacity(0.55))
