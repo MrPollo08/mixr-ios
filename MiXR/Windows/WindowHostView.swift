@@ -1,19 +1,18 @@
-import ARKit
 import UIKit
 import simd
 
-/// Contiene las ventanas flotantes y las proyecta al espacio real:
-/// cada frame ARKit dice dónde está la cámara, así las ventanas se quedan
-/// "pegadas" al mundo mientras movés el teléfono.
+/// Contiene las ventanas flotantes y las proyecta al espacio real.
+///
+/// Todo el cálculo pasa por `CameraPose`, así funciona igual con ARKit (6DoF)
+/// o con la cámara gran angular (3DoF).
 final class WindowHostView: UIView {
 
     weak var session: XRSession?
     var onCountChanged: ((Int) -> Void)?
 
     private(set) var windows: [SpatialWindow] = []
-    private(set) var lastCamera: ARCamera?
+    private(set) var lastPose: CameraPose?
 
-    private var lastViewport: CGSize = .zero
     private var pinchStartWidth: CGFloat = 0
 
     override init(frame: CGRect) {
@@ -110,69 +109,54 @@ final class WindowHostView: UIView {
         bringSubviewToFront(window.view)
     }
 
+    /// Resalta la ventana agarrada por la mano.
+    func setGrabbed(_ window: SpatialWindow?, grabbed: Bool) {
+        window?.view.setGrabbed(grabbed)
+    }
+
     // MARK: - Proyección mundo → pantalla
 
-    func layout(camera: ARCamera, viewportSize: CGSize) {
-        lastCamera = camera
-        lastViewport = viewportSize
+    func layout(pose: CameraPose) {
+        lastPose = pose
         for window in windows {
             layoutWindow(window)
         }
     }
 
     private func layoutWindow(_ window: SpatialWindow) {
-        guard let camera = lastCamera else {
-            window.view.isHidden = true
-            return
-        }
-        let viewport = lastViewport == .zero ? bounds.size : lastViewport
-        guard viewport.width > 1, viewport.height > 1 else { return }
-
-        // Profundidad = distancia de la ventana al plano de la cámara.
-        let worldToCamera = simd_inverse(camera.transform)
-        let inCamera = worldToCamera * simd_float4(window.position, 1)
-        let depth = -inCamera.z
-
-        guard depth > Config.minDepth, depth < Config.maxDepth else {
+        guard let pose = lastPose, let projection = pose.project(window.position) else {
             window.view.isHidden = true
             return
         }
 
-        // Puntos de pantalla por metro a esa profundidad (escala real).
-        let pointsPerMeter = CGFloat(camera.projectionMatrix.columns.1.y)
-            * viewport.height / 2 / CGFloat(depth)
-
-        let projected = camera.projectPoint(window.position,
-                                            orientation: .portrait,
-                                            viewportSize: viewport)
-
-        window.pointsPerMeter = pointsPerMeter
+        window.pointsPerMeter = projection.pointsPerMeter
         window.view.isHidden = false
         window.view.bounds = CGRect(origin: .zero, size: window.view.baseSize)
-        window.view.center = CGPoint(x: CGFloat(projected.x), y: CGFloat(projected.y))
+        window.view.center = projection.center
 
-        let targetWidth = window.physicalWidth * pointsPerMeter
+        let targetWidth = window.physicalWidth * projection.pointsPerMeter
         let scale = targetWidth / window.view.baseSize.width
         window.view.transform = CGAffineTransform(scaleX: scale, y: scale)
 
         // Se atenúa un poco con la distancia (efecto de profundidad).
-        let fade = CGFloat(1.35 - depth * 0.09)
+        let fade = CGFloat(1.35 - projection.depth * 0.09)
         window.view.alpha = min(1, max(0.35, fade))
     }
 
     // MARK: - Interacción con el dedo (respaldo del tracking de manos)
 
     private func handlePan(_ gesture: UIPanGestureRecognizer, window: SpatialWindow) {
-        guard let camera = lastCamera else { return }
+        guard let pose = lastPose else { return }
         switch gesture.state {
         case .began:
             bringToFront(window)
+            setGrabbed(window, grabbed: true)
         case .changed:
             let delta = gesture.translation(in: self)
             gesture.setTranslation(.zero, in: self)
-            move(window, dx: delta.x, dy: delta.y, camera: camera)
+            move(window, dx: delta.x, dy: delta.y, pose: pose)
         default:
-            break
+            setGrabbed(window, grabbed: false)
         }
     }
 
@@ -192,10 +176,10 @@ final class WindowHostView: UIView {
     // MARK: - Movimiento
 
     /// Convierte un desplazamiento en puntos de pantalla a metros del mundo.
-    func move(_ window: SpatialWindow, dx: CGFloat, dy: CGFloat, camera: ARCamera) {
-        guard window.pointsPerMeter > 1 else { return }
+    func move(_ window: SpatialWindow, dx: CGFloat, dy: CGFloat, pose: CameraPose) {
+        guard window.pointsPerMeter > 1, abs(dx) + abs(dy) > 0.01 else { return }
 
-        let transform = camera.transform
+        let transform = pose.transform
         let right = simd_float3(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
         let up = simd_float3(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
         let metersPerPoint = 1 / Float(window.pointsPerMeter)

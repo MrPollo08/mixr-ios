@@ -1,90 +1,134 @@
 import CoreGraphics
 import Foundation
+import QuartzCore
 
 /// Traduce el pellizco de las manos en arrastrar y escalar ventanas.
 ///
-/// - Una mano en pinza sobre una ventana: la agarra y la mueve por el mundo.
-/// - Dos manos en pinza: separarlas agranda la ventana, juntarlas la achica.
+/// Reglas de la versión "que no arrastre mal":
+///  - El ancla del arrastre es la **yema del índice**, no el punto medio de la
+///    pinza (ese se mueve solo cuando cerrás los dedos y hacía temblar todo).
+///  - El desplazamiento es **absoluto** respecto del punto donde agarraste, así
+///    no se acumula error ni se va "arrastrando" solo.
+///  - Si Vision pierde la mano un instante, hay 300 ms de gracia: no se suelta.
+///  - Dos manos en pinza escalan; al soltar una, se reengancha sin salto.
 final class GestureEngine {
 
-    private var dragged: SpatialWindow?
-    private var anchor: CGPoint = .zero
-    private var resizeSpan: CGFloat?
-    private var resizeStartWidth: CGFloat = 0
-    private var latch: [String: Bool] = [:]
+    private var grabbed: SpatialWindow?
+    private var dragKey: String?
+    private var startPoint: CGPoint = .zero
+    private var applied: CGSize = .zero
+    private var lastSeenAt: CFTimeInterval = 0
 
-    var isDragging: Bool { dragged != nil }
+    private var resizing = false
+    private var resizeSpan: CGFloat = 0
+    private var resizeStartWidth: CGFloat = 0
+
+    private var latch: [String: Bool] = [:]
+    private let grace: TimeInterval = 0.30
+
+    var isDragging: Bool { grabbed != nil }
 
     func reset() {
-        dragged = nil
-        resizeSpan = nil
+        grabbed = nil
+        dragKey = nil
+        resizing = false
         latch.removeAll()
     }
 
     func update(poses: [HandPose], host: WindowHostView) {
-        guard let camera = host.lastCamera else { return }
+        guard let pose = host.lastPose else { return }
+        let now = CACurrentMediaTime()
 
+        // 1. Pinza por mano, con histéresis (cuesta empezar, se mantiene fácil).
         var pinching: [HandPose] = []
         var activeKeys = Set<String>()
-
-        for pose in poses {
-            activeKeys.insert(pose.key)
-            let wasPinching = latch[pose.key] ?? false
-            // Histéresis: cuesta más empezar que mantener (evita parpadeos).
+        for hand in poses {
+            activeKeys.insert(hand.key)
+            let wasPinching = latch[hand.key] ?? false
             let threshold: CGFloat = wasPinching ? 0.55 : 0.78
-            let isPinching = pose.pinch > threshold
-            latch[pose.key] = isPinching
-            if isPinching { pinching.append(pose) }
+            let isPinching = hand.pinch > threshold
+            latch[hand.key] = isPinching
+            if isPinching { pinching.append(hand) }
         }
-
         for key in Array(latch.keys) where !activeKeys.contains(key) {
             latch[key] = nil
         }
 
-        guard let window = dragged else {
-            if let first = pinching.first, let target = host.window(at: first.pinchPoint) {
-                dragged = target
-                anchor = first.pinchPoint
-                resizeSpan = nil
-                host.bringToFront(target)
+        // 2. Sin ventana agarrada: ver si la pinza cae sobre alguna.
+        guard let window = grabbed else {
+            if let first = pinching.first, let target = host.window(at: dragPoint(first)) {
+                begin(window: target, with: first, host: host)
             }
             return
         }
 
-        if pinching.isEmpty {
-            dragged = nil
-            resizeSpan = nil
+        // 3. ¿Sigue la misma mano pellizcando?
+        guard let owner = pinching.first(where: { $0.key == dragKey }) else {
+            if now - lastSeenAt < grace { return }
+            end(host: host)
             return
         }
+        lastSeenAt = now
 
+        // 4. Dos manos en pinza: escalar.
         if pinching.count >= 2 {
-            let span = distance(pinching[0].pinchPoint, pinching[1].pinchPoint)
-            guard let start = resizeSpan else {
+            let a = dragPoint(pinching[0])
+            let b = dragPoint(pinching[1])
+            let span = hypot(a.x - b.x, a.y - b.y)
+
+            if !resizing {
+                resizing = true
                 resizeSpan = span
                 resizeStartWidth = window.physicalWidth
-                anchor = pinching[0].pinchPoint
-                return
+            } else if resizeSpan > 4 {
+                let width = resizeStartWidth * (span / resizeSpan)
+                host.setWidth(window, meters: min(max(width, Config.minWindowWidth), Config.maxWindowWidth))
             }
-            if start > 4 {
-                let factor = span / start
-                let width = resizeStartWidth * factor
-                host.setWidth(window,
-                              meters: min(max(width, Config.minWindowWidth), Config.maxWindowWidth))
-            }
-        } else {
-            // Si venía de dos manos, reengancha el arrastre sin dar un salto.
-            if resizeSpan != nil {
-                resizeSpan = nil
-                anchor = pinching[0].pinchPoint
-                return
-            }
-            let point = pinching[0].pinchPoint
-            host.move(window, dx: point.x - anchor.x, dy: point.y - anchor.y, camera: camera)
-            anchor = point
+            return
+        }
+
+        // 5. Volvió a una sola mano: reenganchar sin que pegue un salto.
+        if resizing {
+            resizing = false
+            begin(window: window, with: owner, host: host)
+            return
+        }
+
+        // 6. Arrastre: delta absoluto desde el punto de agarre.
+        let point = dragPoint(owner)
+        let total = CGSize(width: point.x - startPoint.x, height: point.y - startPoint.y)
+        let delta = CGSize(width: total.width - applied.width, height: total.height - applied.height)
+
+        if abs(delta.width) > 0.02 || abs(delta.height) > 0.02 {
+            host.move(window, dx: delta.width, dy: delta.height, pose: pose)
+            applied = total
         }
     }
 
-    private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
-        hypot(a.x - b.x, a.y - b.y)
+    // MARK: - Agarre
+
+    private func begin(window: SpatialWindow, with hand: HandPose, host: WindowHostView) {
+        grabbed = window
+        dragKey = hand.key
+        startPoint = dragPoint(hand)
+        applied = .zero
+        resizing = false
+        lastSeenAt = CACurrentMediaTime()
+        host.bringToFront(window)
+        host.setGrabbed(window, grabbed: true)
+    }
+
+    private func end(host: WindowHostView) {
+        if let window = grabbed {
+            host.setGrabbed(window, grabbed: false)
+        }
+        grabbed = nil
+        dragKey = nil
+        resizing = false
+    }
+
+    /// Punto de control: la yema del índice (estable) y si no, la pinza.
+    private func dragPoint(_ hand: HandPose) -> CGPoint {
+        hand.joints[.indexTip] ?? hand.pinchPoint
     }
 }

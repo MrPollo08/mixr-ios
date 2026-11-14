@@ -2,35 +2,63 @@ import UIKit
 import Vision
 
 /// Dibuja el esqueleto de las manos encima de la cámara (solo lectura).
+///
+/// Se dibujan las 21 articulaciones con un halo, la palma translúcida y las
+/// yemas más grandes, para que se lea igual que MediaPipe.
 final class HandOverlayView: UIView {
 
+    private let glowLayer = CAShapeLayer()
     private let boneLayer = CAShapeLayer()
+    private let palmLayer = CAShapeLayer()
     private let jointLayer = CAShapeLayer()
+    private let fingertipLayer = CAShapeLayer()
     private let pinchLayer = CAShapeLayer()
     private let pointerLayer = CAShapeLayer()
+
+    private let accent = UIColor(red: 0.42, green: 0.86, blue: 1.0, alpha: 1)
+
+    private static let palmChain: [VNHumanHandPoseObservation.JointName] = [
+        .wrist, .indexMCP, .middleMCP, .ringMCP, .littleMCP
+    ]
+
+    private static let fingertipNames: [VNHumanHandPoseObservation.JointName] = [
+        .thumbTip, .indexTip, .middleTip, .ringTip, .littleTip
+    ]
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
         isOpaque = false
 
+        glowLayer.fillColor = UIColor.clear.cgColor
+        glowLayer.strokeColor = accent.withAlphaComponent(0.22).cgColor
+        glowLayer.lineWidth = 9
+        glowLayer.lineCap = .round
+        glowLayer.lineJoin = .round
+
         boneLayer.fillColor = UIColor.clear.cgColor
-        boneLayer.strokeColor = UIColor(red: 0.42, green: 0.86, blue: 1.0, alpha: 0.85).cgColor
+        boneLayer.strokeColor = accent.withAlphaComponent(0.95).cgColor
         boneLayer.lineWidth = 3
         boneLayer.lineCap = .round
         boneLayer.lineJoin = .round
 
-        jointLayer.fillColor = UIColor.white.withAlphaComponent(0.9).cgColor
+        palmLayer.fillColor = accent.withAlphaComponent(0.16).cgColor
+        palmLayer.strokeColor = accent.withAlphaComponent(0.35).cgColor
+        palmLayer.lineWidth = 1
+
+        jointLayer.fillColor = UIColor.white.withAlphaComponent(0.92).cgColor
+
+        fingertipLayer.fillColor = UIColor(red: 1.0, green: 0.93, blue: 0.55, alpha: 1).cgColor
 
         pinchLayer.fillColor = UIColor.clear.cgColor
         pinchLayer.strokeColor = UIColor(red: 1.0, green: 0.72, blue: 0.2, alpha: 0.95).cgColor
         pinchLayer.lineWidth = 3
 
         pointerLayer.fillColor = UIColor.white.withAlphaComponent(0.95).cgColor
-        pointerLayer.strokeColor = UIColor(red: 0.42, green: 0.86, blue: 1.0, alpha: 0.95).cgColor
+        pointerLayer.strokeColor = accent.cgColor
         pointerLayer.lineWidth = 2
 
-        for shape in [boneLayer, jointLayer, pinchLayer, pointerLayer] {
+        for shape in [glowLayer, boneLayer, palmLayer, jointLayer, fingertipLayer, pinchLayer, pointerLayer] {
             layer.addSublayer(shape)
         }
     }
@@ -41,10 +69,9 @@ final class HandOverlayView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        boneLayer.frame = bounds
-        jointLayer.frame = bounds
-        pinchLayer.frame = bounds
-        pointerLayer.frame = bounds
+        for shape in [glowLayer, boneLayer, palmLayer, jointLayer, fingertipLayer, pinchLayer, pointerLayer] {
+            shape.frame = bounds
+        }
     }
 
     /// Punto donde está apuntando la mano en modo control (nil = oculto).
@@ -69,7 +96,9 @@ final class HandOverlayView: UIView {
 
     func render(poses: [HandPose]) {
         let bones = UIBezierPath()
+        let palms = UIBezierPath()
         let joints = UIBezierPath()
+        let fingertips = UIBezierPath()
         let pinches = UIBezierPath()
 
         for pose in poses {
@@ -86,9 +115,28 @@ final class HandOverlayView: UIView {
                 }
             }
 
-            for point in pose.joints.values {
-                joints.append(UIBezierPath(ovalIn: CGRect(x: point.x - 3, y: point.y - 3,
-                                                          width: 6, height: 6)))
+            let palmPoints = Self.palmChain.compactMap { pose.joints[$0] }
+            if palmPoints.count >= 3 {
+                var started = false
+                for point in palmPoints {
+                    if started {
+                        palms.addLine(to: point)
+                    } else {
+                        palms.move(to: point)
+                        started = true
+                    }
+                }
+                palms.close()
+            }
+
+            for (name, point) in pose.joints {
+                if Self.fingertipNames.contains(name) {
+                    fingertips.append(UIBezierPath(ovalIn: CGRect(x: point.x - 4, y: point.y - 4,
+                                                                  width: 8, height: 8)))
+                } else {
+                    joints.append(UIBezierPath(ovalIn: CGRect(x: point.x - 2.6, y: point.y - 2.6,
+                                                              width: 5.2, height: 5.2)))
+                }
             }
 
             if pose.pinch > 0.55 {
@@ -100,8 +148,11 @@ final class HandOverlayView: UIView {
             }
         }
 
+        glowLayer.path = bones.cgPath
         boneLayer.path = bones.cgPath
+        palmLayer.path = palms.cgPath
         jointLayer.path = joints.cgPath
+        fingertipLayer.path = fingertips.cgPath
         pinchLayer.path = pinches.cgPath
     }
 }

@@ -6,10 +6,14 @@ páginas web. Las pantallas quedan ancladas al espacio (si te movés, siguen
 donde las dejaste), se agrandan y se achican, y se pueden **controlar con la
 mano** (hand tracking) como si fueran un mouse.
 
-- **Realidad mixta**: passthrough de cámara con ARKit (6DoF, escala real en metros).
+- **Realidad mixta horizontal (tipo visor)**: passthrough de cámara y ventanas
+  ancladas al mundo en metros reales. Pensada para usarse apaisado, como un Quest.
+- **Dos cámaras**: 0.5× ultra gran angular (~106° de campo) y 1× con ARKit (6DoF).
+- **Manos con oclusión**: la mano **pasa por delante** de las ventanas, con los
+  píxeles reales de la cámara, no con un dibujo.
 - **Pantalla del PC**: stream H.264 de baja latencia (VideoToolbox) + mouse virtual.
-- **Hand tracking**: Vision `VNDetectHumanHandPoseRequest`, 21 puntos por mano,
-  hasta 2 manos, esqueleto dibujado en pantalla.
+- **Hand tracking**: Vision `VNDetectHumanHandPoseRequest`, 21 articulaciones por
+  mano, hasta 2 manos, esqueleto con halo y yemas marcadas.
 - **Ventanas**: PC, video (HLS/MP4 o de tu galería) y navegador web real (`WKWebView`).
 
 ```
@@ -67,6 +71,20 @@ Pasos con Sideloadly (Windows):
 4. En iOS 16+ activá **Modo de desarrollador** (Ajustes → Privacidad y
    seguridad → Modo de desarrollador) y reiniciá.
 5. Abrí la app y aceptá cámara + red local.
+
+---
+
+## 1.5. Los chips de arriba
+
+| Chip | Qué hace |
+|---|---|
+| `0.5×` / `1×` | cambia de cámara: ultra gran angular (3DoF) o normal con ARKit (6DoF) |
+| `Oclusión` | prende/apaga que la mano pase por delante de las ventanas |
+| `⌖` | recentra el "adelante" (útil en 0.5× después de girar) |
+
+El arrastre de ventanas usa el **dedo índice** como punto de control (no el
+punto medio de la pinza, que se mueve solo al cerrar los dedos) y tolera que
+Vision pierda la mano ~300 ms, así no se te suelta a mitad de camino.
 
 ---
 
@@ -212,12 +230,19 @@ pegado).
 
 ## 5. Limitaciones honestas
 
-- **Solo vertical**: la app está bloqueada en portrait, que es lo que permite
-  que el mapeo de manos (Vision `.right`) sea exacto.
+- **Horizontal, como un visor**: la app corre apaisada (soporta las dos
+  orientaciones y también vertical por si la agarrás así). Todo el mapeo de
+  manos y la proyección de ventanas se recalculan según la orientación.
+- **0.5× tiene 3DoF, no 6DoF**: ARKit no deja usar la ultra gran angular, así
+  que ese modo usa CoreMotion. Ganás campo de visión (manos y mundo), perdés el
+  anclaje por traslación: las ventanas giran con vos pero no quedan clavadas si
+  caminás. Con el botón **⌖** volvés a poner "adelante" donde estás mirando.
+- **La oclusión de manos es geométrica**: recorta la imagen de la cámara con la
+  silueta de la mano (dedos + palma). Es muy convincente de frente, pero si la
+  mano está muy de perfil la silueta puede quedar corta. Se apaga con el chip
+  **Oclusión**.
 - **Manos sin profundidad**: Vision da 21 puntos 2D; la pinza se calcula por
   distancia normalizada. Funciona mejor con buena luz y de frente.
-- **Sin oclusión**: las ventanas se dibujan siempre encima de la cámara; no hay
-  malla del entorno (ARKit sin `planeDetection`, para no gastar batería).
 - **El control es del escritorio, no inyección en juegos**: usa `SetCursorPos` +
   `mouse_event`. Juegos con anti-cheat o que piden raw input pueden ignorarlo;
   los que corren como administrador necesitan el script elevado.

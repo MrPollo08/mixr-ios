@@ -116,6 +116,14 @@ final class SpatialWindowView: UIView {
 
     // MARK: - Contenido
 
+    /// Resalta la ventana cuando la mano la agarra.
+    func setGrabbed(_ grabbed: Bool) {
+        card.layer.borderColor = grabbed
+            ? UIColor(red: 0.42, green: 0.86, blue: 1.0, alpha: 0.95).cgColor
+            : UIColor.white.withAlphaComponent(0.16).cgColor
+        card.layer.borderWidth = grabbed ? 2.5 : 1
+    }
+
     func setContent(_ view: UIView) {
         content?.removeFromSuperview()
         content = view

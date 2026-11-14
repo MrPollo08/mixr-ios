@@ -15,7 +15,7 @@ struct HandPose {
     let pinch: CGFloat
 }
 
-/// Detección de manos con Vision sobre los frames de ARKit.
+/// Detección de manos con Vision (21 articulaciones por mano, hasta 2 manos).
 final class HandTracker {
 
     /// Conexiones del esqueleto que se dibujan.
@@ -42,6 +42,8 @@ final class HandTracker {
     /// Encola un frame. Vision corre en su propia cola y avisa por `completion`.
     func submit(pixelBuffer: CVPixelBuffer,
                 viewportSize: CGSize,
+                imageAspect: CGFloat,
+                orientation: CGImagePropertyOrientation,
                 completion: @escaping ([HandPose]) -> Void) {
         queue.async { [weak self] in
             guard let self else { return }
@@ -52,7 +54,10 @@ final class HandTracker {
             self.lastProcessedAt = now
             self.busy = true
 
-            let poses = self.detect(pixelBuffer: pixelBuffer, viewportSize: viewportSize)
+            let poses = self.detect(pixelBuffer: pixelBuffer,
+                                    viewportSize: viewportSize,
+                                    imageAspect: imageAspect,
+                                    orientation: orientation)
             self.busy = false
             completion(poses)
         }
@@ -66,10 +71,12 @@ final class HandTracker {
 
     // MARK: - Detección
 
-    private func detect(pixelBuffer: CVPixelBuffer, viewportSize: CGSize) -> [HandPose] {
+    private func detect(pixelBuffer: CVPixelBuffer,
+                        viewportSize: CGSize,
+                        imageAspect: CGFloat,
+                        orientation: CGImagePropertyOrientation) -> [HandPose] {
         do {
-            // .right = cámara trasera en vertical (la app está bloqueada en vertical).
-            try sequence.perform([request], on: pixelBuffer, orientation: .right)
+            try sequence.perform([request], on: pixelBuffer, orientation: orientation)
         } catch {
             return []
         }
@@ -79,7 +86,7 @@ final class HandTracker {
             return []
         }
 
-        let projector = ImageProjector(viewportSize: viewportSize)
+        let projector = ImageProjector(viewportSize: viewportSize, imageAspect: imageAspect)
         var poses: [HandPose] = []
         var seen = Set<String>()
 
@@ -96,12 +103,12 @@ final class HandTracker {
             guard let raw = try? observation.recognizedPoints(.all) else { continue }
 
             var joints: [VNHumanHandPoseObservation.JointName: CGPoint] = [:]
-            for (name, point) in raw where point.confidence > 0.25 {
+            for (name, point) in raw where point.confidence > 0.15 {
                 let mapped = projector.map(CGPoint(x: CGFloat(point.location.x),
                                                    y: CGFloat(point.location.y)))
                 joints[name] = smooth(key: key, name: name, value: mapped)
             }
-            guard joints.count >= 6 else { continue }
+            guard joints.count >= 5 else { continue }
             guard let thumb = joints[.thumbTip], let index = joints[.indexTip] else { continue }
 
             let pinchPoint = CGPoint(x: (thumb.x + index.x) / 2, y: (thumb.y + index.y) / 2)
@@ -123,7 +130,8 @@ final class HandTracker {
         return poses
     }
 
-    /// Suavizado exponencial por articulación (evita el temblor del esqueleto).
+    /// Suavizado exponencial por articulación.
+    /// Alpha alto = sigue la mano de cerca (menos "arrastre" al moverla).
     private func smooth(key: String,
                         name: VNHumanHandPoseObservation.JointName,
                         value: CGPoint) -> CGPoint {
@@ -133,7 +141,7 @@ final class HandTracker {
             smoothed[key] = store
             return value
         }
-        let alpha: CGFloat = 0.55
+        let alpha: CGFloat = 0.7
         let result = CGPoint(x: previous.x + (value.x - previous.x) * alpha,
                              y: previous.y + (value.y - previous.y) * alpha)
         store[name] = result
@@ -142,17 +150,17 @@ final class HandTracker {
     }
 }
 
-/// Pasa puntos normalizados de Vision (imagen vertical, origen abajo-izquierda)
+/// Pasa puntos normalizados de Vision (imagen ya parada, origen abajo-izquierda)
 /// a coordenadas de pantalla con recorte "aspect fill", igual que la cámara.
 struct ImageProjector {
     let viewportSize: CGSize
-    /// Relación de aspecto de la imagen vertical de la cámara trasera (4:3).
+    /// ancho / alto de la imagen ya orientada (4/3 en horizontal, 3/4 en vertical).
     var imageAspect: CGFloat = 3.0 / 4.0
 
     func map(_ point: CGPoint) -> CGPoint {
         let width = viewportSize.width
         let height = viewportSize.height
-        guard width > 1, height > 1 else { return .zero }
+        guard width > 1, height > 1, imageAspect > 0.1 else { return .zero }
 
         let scale = max(width / imageAspect, height)
         let drawnWidth = imageAspect * scale

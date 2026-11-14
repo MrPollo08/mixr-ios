@@ -28,12 +28,20 @@ enum Config {
     static let maxDepth: Float = 9.0
 
     /// Cada cuánto se procesa un frame para las manos.
-    static let handTrackingInterval: TimeInterval = 1.0 / 24.0
+    static let handTrackingInterval: TimeInterval = 1.0 / 30.0
 
     /// Puerto TCP donde el iPhone escucha el video del PC.
     static let streamPort: UInt16 = 47295
     /// Puerto UDP donde el PC escucha el mouse virtual.
     static let inputPort: UInt16 = 47300
+
+    /// Campo de visión del lado largo de la cámara ultra gran angular (0.5x).
+    /// iPhone: ~105–110°. Se puede subir/bajar si el fondo y las manos no
+    /// coinciden exactamente con el mundo real.
+    static let ultraWideLongFieldOfView: CGFloat = 106
+
+    /// Cadencia de la cámara gran angular (frames por segundo).
+    static let wideCameraFPS: Int32 = 30
 }
 
 /// Comando que hay que ejecutar en el PC para mandar la pantalla al iPhone.

@@ -1,14 +1,38 @@
 import ARKit
 import AVFoundation
 import Combine
+import CoreVideo
 import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 import simd
 
-/// Orquesta todo: ARKit (cámara del mundo real + posición en el espacio),
-/// tracking de manos con Vision y las ventanas flotantes ancladas al mundo.
+/// Con qué cámara se ve el mundo.
+enum CameraMode: Equatable {
+    /// Ultra gran angular 0.5x (AVFoundation + CoreMotion, 3DoF).
+    /// Mucho más campo de visión: ideal para manos y para el efecto visor.
+    case ultraWide
+    /// Cámara normal con ARKit (6DoF, anclaje real al mundo).
+    case arkit
+
+    var label: String {
+        switch self {
+        case .ultraWide: return "0.5×"
+        case .arkit: return "1×"
+        }
+    }
+
+    var trackingLabel: String {
+        switch self {
+        case .ultraWide: return "gran angular · 3DoF"
+        case .arkit: return "normal · 6DoF"
+        }
+    }
+}
+
+/// Orquesta todo: cámara (ARKit o gran angular), tracking de manos con Vision,
+/// ventanas flotantes ancladas al mundo y oclusión de manos.
 final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegate {
 
     // MARK: - Estado que consume SwiftUI
@@ -22,18 +46,26 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     /// IP del PC conectado (se detecta sola cuando llega el stream).
     @Published var pcHost: String?
 
+    @Published private(set) var cameraMode: CameraMode = .ultraWide
+    @Published private(set) var occlusionEnabled = true
+
     // MARK: - Vistas de UIKit
 
     let sceneView = ARSCNView()
+    let wideView = WideCameraView()
     let hostView = WindowHostView()
+    let occlusionView = HandOcclusionView()
     let overlay = HandOverlayView()
 
     private let arSession = ARSession()
     private let tracker = HandTracker()
     private let gestures = GestureEngine()
     let pointer = PointerController()
+
     private var isRunning = false
     private var displayLink: CADisplayLink?
+    private var lastPose: CameraPose?
+    private var lastHands: [HandPose] = []
 
     /// Contenedor único que se entrega a SwiftUI.
     lazy var containerView: UIView = {
@@ -41,12 +73,17 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         view.backgroundColor = .black
         view.clipsToBounds = true
 
-        let stack: [UIView] = [sceneView, hostView, overlay]
+        // De abajo a arriba: cámara, ventanas, manos (oclusión), esqueleto.
+        let stack: [UIView] = [sceneView, wideView, hostView, occlusionView, overlay]
         for subview in stack {
             subview.frame = view.bounds
             subview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             view.addSubview(subview)
         }
+
+        sceneView.isUserInteractionEnabled = false
+        wideView.isUserInteractionEnabled = false
+        occlusionView.isUserInteractionEnabled = false
         overlay.isUserInteractionEnabled = false
 
         hostView.session = self
@@ -54,18 +91,15 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             guard let self, self.windowCount != count else { return }
             self.windowCount = count
         }
+
+        applyModeVisibility()
         return view
     }()
 
     // MARK: - Ciclo de vida
 
     func start() {
-        guard !isRunning, unsupportedMessage == nil else { return }
-
-        guard ARWorldTrackingConfiguration.isSupported else {
-            unsupportedMessage = "Este iPhone no soporta ARKit (hace falta iPhone 6s o posterior)."
-            return
-        }
+        guard !isRunning else { return }
 
         requestCameraPermission { [weak self] granted in
             guard let self else { return }
@@ -73,7 +107,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                 self.unsupportedMessage = "Falta el permiso de cámara. Activalo en Ajustes → MiXR."
                 return
             }
-            self.beginARKit()
+            self.beginSession()
         }
     }
 
@@ -90,28 +124,40 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         }
     }
 
-    private func beginARKit() {
-        let configuration = ARWorldTrackingConfiguration()
-        configuration.worldAlignment = .gravity
-        configuration.planeDetection = []
-        configuration.isLightEstimationEnabled = false
-        configuration.environmentTexturing = .none
+    private func beginSession() {
+        if cameraMode == .arkit, !ARWorldTrackingConfiguration.isSupported {
+            cameraMode = .ultraWide
+        }
 
-        sceneView.session = arSession
-        sceneView.automaticallyUpdatesLighting = false
-        sceneView.antialiasingMode = .none
-        sceneView.preferredFramesPerSecond = 60
+        switch cameraMode {
+        case .arkit:
+            let configuration = ARWorldTrackingConfiguration()
+            configuration.worldAlignment = .gravity
+            configuration.planeDetection = []
+            configuration.isLightEstimationEnabled = false
+            configuration.environmentTexturing = .none
 
-        arSession.run(configuration, options: [.resetTracking, .removeExistingAnchors])
-        isRunning = true
+            sceneView.session = arSession
+            sceneView.automaticallyUpdatesLighting = false
+            sceneView.antialiasingMode = .none
+            sceneView.preferredFramesPerSecond = 60
+            arSession.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+            wideView.stop()
 
-        // Se leen los frames con un display link en vez de con el delegate del
-        // ARSession: `ARSCNView` necesita quedarse con ese delegate para pintar
-        // la cámara, y así no hay conflicto.
+        case .ultraWide:
+            arSession.pause()
+            wideView.start()
+        }
+
+        applyModeVisibility()
+
+        // Los frames se leen acá (no con el delegate de ARSession) para no
+        // pelearse con ARSCNView, que necesita quedarse con ese delegate.
         let link = CADisplayLink(target: self, selector: #selector(tick))
         link.add(to: .main, forMode: .common)
         displayLink = link
 
+        isRunning = true
         configureAudio()
         UIApplication.shared.isIdleTimerDisabled = true
     }
@@ -121,6 +167,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         displayLink?.invalidate()
         displayLink = nil
         arSession.pause()
+        wideView.stop()
         isRunning = false
         UIApplication.shared.isIdleTimerDisabled = false
     }
@@ -134,23 +181,91 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         }
     }
 
+    private func applyModeVisibility() {
+        sceneView.isHidden = cameraMode != .arkit
+        wideView.isHidden = cameraMode != .ultraWide
+        occlusionView.isHidden = !(cameraMode == .ultraWide && occlusionEnabled)
+        if occlusionView.isHidden { occlusionView.clear() }
+    }
+
+    // MARK: - Cambiar de cámara / oclusión
+
+    func toggleCameraMode() {
+        setCameraMode(cameraMode == .ultraWide ? .arkit : .ultraWide)
+    }
+
+    func setCameraMode(_ mode: CameraMode) {
+        guard mode != cameraMode else { return }
+        let wasRunning = isRunning
+        pause()
+
+        cameraMode = mode
+        lastPose = nil
+        lastHands = []
+        overlay.render(poses: [])
+        overlay.setPointer(nil)
+        gestures.reset()
+
+        if wasRunning { start() }
+    }
+
+    func toggleOcclusion() {
+        occlusionEnabled.toggle()
+        applyModeVisibility()
+    }
+
+    /// Toma la orientación actual como "adelante" (solo modo gran angular).
+    func recenterView() {
+        wideView.recenter()
+    }
+
     // MARK: - Frames
 
     @objc private func tick() {
-        guard isRunning, let frame = arSession.currentFrame else { return }
-        let camera = frame.camera
+        guard isRunning else { return }
         let viewport = containerView.bounds.size
         guard viewport.width > 1, viewport.height > 1 else { return }
 
-        hostView.layout(camera: camera, viewportSize: viewport)
+        let orientation = ScreenOrientation.current
+        var pose: CameraPose?
+        var buffer: CVPixelBuffer?
 
-        guard handsVisible else { return }
-        tracker.submit(pixelBuffer: frame.capturedImage, viewportSize: viewport) { [weak self] poses in
+        switch cameraMode {
+        case .arkit:
+            if let frame = arSession.currentFrame {
+                let imageSize = CGSize(width: CVPixelBufferGetWidth(frame.capturedImage),
+                                       height: CVPixelBufferGetHeight(frame.capturedImage))
+                pose = CameraPose(arkitCamera: frame.camera,
+                                  orientation: orientation,
+                                  viewport: viewport,
+                                  imageSize: imageSize)
+                buffer = frame.capturedImage
+            }
+
+        case .ultraWide:
+            buffer = wideView.latestPixelBuffer
+            pose = wideView.currentPose(viewport: viewport, orientation: orientation)
+        }
+
+        guard let pose else { return }
+        lastPose = pose
+        hostView.layout(pose: pose)
+
+        if cameraMode == .ultraWide, occlusionEnabled, let buffer {
+            occlusionView.update(buffer: buffer, hands: lastHands, orientation: orientation)
+        }
+
+        guard handsVisible, let buffer else { return }
+        tracker.submit(pixelBuffer: buffer,
+                       viewportSize: viewport,
+                       imageAspect: pose.imageAspect,
+                       orientation: ScreenOrientation.visionOrientation(for: orientation)) { [weak self] poses in
             DispatchQueue.main.async { self?.apply(poses) }
         }
     }
 
     private func apply(_ poses: [HandPose]) {
+        lastHands = poses
         overlay.render(poses: poses)
         if handCount != poses.count { handCount = poses.count }
 
@@ -166,23 +281,20 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     // MARK: - Ventanas
 
     func addVideoWindow(url: URL?) {
-        add(kind: .video(url), width: Config.windowWidth)
+        add(kind: .video(url), width: Config.windowWidth, distance: Config.windowDistance)
     }
 
     func addWebWindow(url: URL) {
-        add(kind: .web(url), width: Config.windowWidth)
+        add(kind: .web(url), width: Config.windowWidth, distance: Config.windowDistance)
     }
 
     /// Abre la ventana de la pantalla del PC (y empieza a escuchar el stream).
     func addPCWindow(port: UInt16 = Config.streamPort) {
-        let position = positionInFrontOfCamera(index: hostView.windows.count,
-                                               distance: Config.streamDistance)
-        hostView.add(kind: .pcStream(port: port), position: position, physicalWidth: Config.streamWidth)
+        add(kind: .pcStream(port: port), width: Config.streamWidth, distance: Config.streamDistance)
     }
 
-    private func add(kind: WindowKind, width: CGFloat) {
-        let position = positionInFrontOfCamera(index: hostView.windows.count,
-                                               distance: Config.windowDistance)
+    private func add(kind: WindowKind, width: CGFloat, distance: Float) {
+        let position = positionInFrontOfCamera(index: hostView.windows.count, distance: distance)
         hostView.add(kind: kind, position: position, physicalWidth: width)
     }
 
@@ -195,23 +307,29 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         overlay.isHidden = !handsVisible
         if !handsVisible {
             overlay.render(poses: [])
+            overlay.setPointer(nil)
             gestures.reset()
+            lastHands = []
+            occlusionView.clear()
             handCount = 0
         }
     }
 
     /// Posición nueva delante de la cámara, escalonada para que no se tapen.
     private func positionInFrontOfCamera(index: Int, distance: Float) -> simd_float3 {
-        let transform = arSession.currentFrame?.camera.transform ?? matrix_identity_float4x4
+        let transform = lastPose?.transform
+            ?? arSession.currentFrame?.camera.transform
+            ?? matrix_identity_float4x4
+
         let right = simd_float3(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
         let up = simd_float3(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
         let back = simd_float3(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
         let origin = simd_float3(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
 
-        let column = Float(index % 2) * 0.62 - 0.31
-        let row = Float((index / 2) % 3) * 0.36
+        let column = Float(index % 2) * 0.68 - 0.34
+        let row = Float((index / 2) % 3) * 0.4
 
-        return origin + right * column + up * (row - 0.12) - back * distance
+        return origin + right * column + up * (row - 0.10) - back * distance
     }
 
     // MARK: - Modo control (mano = mouse del PC)
