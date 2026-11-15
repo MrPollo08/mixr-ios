@@ -50,11 +50,24 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     @Published private(set) var cameraMode: CameraMode = XRSession.savedMode()
     @Published private(set) var occlusionEnabled = false
     /// Modo VR: la escena se dibuja dos veces, una por ojo.
-    @Published private(set) var stereoEnabled = false
+    @Published var stereoEnabled = false {
+        didSet { if stereoEnabled != oldValue { applyStereoMode() } }
+    }
+    /// Ajustes del marco de las gafas (pantalla previa a la cámara).
+    @Published var vrScale: CGFloat = 0.5 { didSet { saveVRSettings() } }
+    @Published var vrSeparation: CGFloat = 20 { didSet { saveVRSettings() } }
+    @Published var vrVertical: CGFloat = 0 { didSet { saveVRSettings() } }
+    /// Si está en true se muestra la pantalla de ajuste en vez de la cámara.
+    @Published var showsSetup = true
 
     private let leftPane = StereoPane()
     private let rightPane = StereoPane()
     private let stereoRoot = UIView()
+
+    override init() {
+        super.init()
+        loadVRSettings()
+    }
 
     private static let modeKey = "mixr.cameraMode"
 
@@ -113,8 +126,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private var lastDebugAt: CFTimeInterval = 0
 
     /// Contenedor único que se entrega a SwiftUI.
-    lazy var containerView: UIView = {
-        let view = UIView(frame: .zero)
+    lazy var containerView: UIView = {        let view = UIView(frame: .zero)
         view.backgroundColor = .black
         view.clipsToBounds = true
 
@@ -153,11 +165,44 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         return view
     }()
 
-    // MARK: - Ciclo de vida
+
+    // MARK: - Ajustes previos y arranque
+
+    /// Pasa de la pantalla de ajuste a la c�mara.
+    func startCamera() {
+        showsSetup = false
+        start()
+    }
+
+    /// Vuelve a la pantalla de ajuste (para calibrar el marco de las gafas).
+    func openSetup() {
+        pause()
+        showsSetup = true
+    }
+
+    private func saveVRSettings() {
+        let defaults = UserDefaults.standard
+        defaults.set(Double(vrScale), forKey: "mixr.vrScale")
+        defaults.set(Double(vrSeparation), forKey: "mixr.vrSeparation")
+        defaults.set(Double(vrVertical), forKey: "mixr.vrVertical")
+    }
+
+    private func loadVRSettings() {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "mixr.vrScale") != nil {
+            vrScale = CGFloat(defaults.double(forKey: "mixr.vrScale"))
+        }
+        if defaults.object(forKey: "mixr.vrSeparation") != nil {
+            vrSeparation = CGFloat(defaults.double(forKey: "mixr.vrSeparation"))
+        }
+        if defaults.object(forKey: "mixr.vrVertical") != nil {
+            vrVertical = CGFloat(defaults.double(forKey: "mixr.vrVertical"))
+        }
+    }
+        // MARK: - Ciclo de vida
 
     func start() {
         guard !isRunning else { return }
-
         gestures.onSummon = { [weak self] in
             self?.summonMenu()
         }
@@ -353,7 +398,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         case .hands: toggleHands()
         case .occlusion: toggleOcclusion()
         case .pin: togglePinnedMenu()
-        case .stereo: toggleStereo()
+        case .stereo: stereoEnabled.toggle()
         case .recenter: recenterView()
         case .clear: closeAllWindows()
         }
@@ -577,8 +622,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
     // MARK: - Modo VR (dos pantallas)
 
-    func toggleStereo() {
-        stereoEnabled.toggle()
+    private func applyStereoMode() {?
         stereoRoot.isHidden = !stereoEnabled
 
         let monoViews: [UIView] = [cameraSampleView, sceneView, wideView, hostView, occlusionView, overlay]
@@ -639,8 +683,10 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         leftPane.frame = CGRect(origin: .zero, size: half)
         rightPane.frame = CGRect(x: half.width, y: 0, width: half.width, height: half.height)
 
-        leftPane.layoutScene(containerSize: size, eyeShift: -10)
-        rightPane.layoutScene(containerSize: size, eyeShift: 10)
+        leftPane.layoutScene(containerSize: size, scale: vrScale,
+                             eyeShift: -vrSeparation / 2, verticalOffset: vrVertical)
+        rightPane.layoutScene(containerSize: size, scale: vrScale,
+                              eyeShift: vrSeparation / 2, verticalOffset: vrVertical)
 
         if let buffer {
             leftPane.background.enqueue(buffer)

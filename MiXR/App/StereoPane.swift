@@ -33,26 +33,27 @@ final class StereoPane: UIView {
     }
 
     /// Arma la escena en coordenadas de pantalla completa y la escala a la mitad.
-    func layoutScene(containerSize: CGSize, eyeShift: CGFloat) {
+    func layoutScene(containerSize: CGSize, scale: CGFloat, eyeShift: CGFloat, verticalOffset: CGFloat) {
         guard containerSize.width > 1, containerSize.height > 1 else { return }
 
-        let half = CGSize(width: containerSize.width / 2, height: containerSize.height / 2)
-        stage.bounds = CGRect(origin: .zero, size: half)
-        stage.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let scaled = CGSize(width: containerSize.width * scale,
+                            height: containerSize.height * scale)
+        stage.bounds = CGRect(origin: .zero, size: scaled)
+        stage.center = CGPoint(x: bounds.midX, y: bounds.midY + verticalOffset)
         stage.transform = CGAffineTransform(translationX: eyeShift, y: 0)
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        background.frame = CGRect(origin: .zero, size: half)
+        background.frame = CGRect(origin: .zero, size: scaled)
 
         host.bounds = CGRect(origin: .zero, size: containerSize)
-        host.center = CGPoint(x: half.width / 2, y: half.height / 2)
-        host.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+        host.center = CGPoint(x: scaled.width / 2, y: scaled.height / 2)
+        host.transform = CGAffineTransform(scaleX: scale, y: scale)
 
         overlay.bounds = CGRect(origin: .zero, size: containerSize)
-        overlay.center = CGPoint(x: half.width / 2, y: half.height / 2)
-        overlay.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+        overlay.center = CGPoint(x: scaled.width / 2, y: scaled.height / 2)
+        overlay.transform = CGAffineTransform(scaleX: scale, y: scale)
 
         CATransaction.commit()
     }

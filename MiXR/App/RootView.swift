@@ -5,6 +5,14 @@ struct RootView: View {
     @ObservedObject var session: XRSession
 
     var body: some View {
+        if session.showsSetup {
+            SetupView(session: session)
+        } else {
+            cameraScene
+        }
+    }
+
+    private var cameraScene: some View {
         ZStack(alignment: .bottom) {
             XRCameraView(session: session)
                 .ignoresSafeArea()
@@ -55,7 +63,6 @@ struct RootView: View {
             }
         }
         .background(Color.black)
-        .onAppear { session.start() }
         .onDisappear { session.pause() }
     }
 
