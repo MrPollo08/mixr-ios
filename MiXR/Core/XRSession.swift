@@ -126,6 +126,8 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
     /// Para re-anclar justo cuando se suelta una ventana.
     private var wasDragging = false
+    /// Cuándo se pidió el 0.5× (para decidir el respaldo de AVFoundation).
+    private var wideRequestedAt: CFTimeInterval = 0
 
     /// SceneKit puede devolver una cámara vieja si la vista no se está
     /// renderizando (modo VR). Proyectamos con ARKit, que siempre está al día.
@@ -371,12 +373,29 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         setCameraMode(cameraMode == .ultraWide ? .arkit : .ultraWide)
     }
 
+    /// Tile "0.5x". Primero intenta la imagen ultra gran angular que ARKit
+    /// captura por dentro (esa **mantiene el 6DoF**). Si este iPhone/iOS no la
+    /// expone, cae a la cámara 0.5× real de AVFoundation: más nítida y mucho más
+    /// campo de visión, pero sin anclaje de traslación.
+    func toggleWide() {
+        if wideFOV {
+            wideFOV = false
+            if cameraMode == .ultraWide {
+                setCameraMode(.arkit)
+            }
+            return
+        }
+        wideFOV = true
+        wideRequestedAt = CACurrentMediaTime()
+    }
+
     func setCameraMode(_ mode: CameraMode) {
         guard mode != cameraMode else { return }
         let wasRunning = isRunning
         pause()
 
         cameraMode = mode
+        if mode == .arkit { wideFOV = false }
         saveMode()
         lastPose = nil
         lastHands = []
@@ -504,7 +523,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         case .occlusion: toggleOcclusion()
         case .stereo: stereoEnabled.toggle()
         case .dreamspace: toggleEnvironment()
-        case .wide: wideFOV.toggle()
+        case .wide: toggleWide()
         case .recenter: recenterView()
         case .clear: closeAllWindows()
         }
@@ -585,6 +604,15 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
                 // Anclajes: las ventanas quedan clavadas en el mundo real.
                 syncAnchors(dragging: gestures.isDragging)
+
+                // Si pediste 0.5× y ARKit no expone su imagen ultra gran angular
+                // en este iPhone, pasamos a la cámara 0.5× real (AVFoundation).
+                if wideFOV, ultraWideBuffer == nil, now - wideRequestedAt > 1.0 {
+                    wideRequestedAt = now + 3600   // una sola vez
+                    DispatchQueue.main.async { [weak self] in
+                        self?.setCameraMode(.ultraWide)
+                    }
+                }
             }
 
         case .ultraWide:
