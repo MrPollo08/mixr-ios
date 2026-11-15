@@ -44,7 +44,6 @@ class SkyboxEntity: Entity {
                                    texture: nil)
         }
         // La esfera se mira desde adentro: no descartamos caras.
-        material.faceCulling = .none
 
         addChild(ModelEntity(mesh: mesh, materials: [material]))
     }

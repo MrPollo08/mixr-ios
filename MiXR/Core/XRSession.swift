@@ -289,7 +289,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                 // RealityKit usa la MISMA sesión de ARKit: una sola cámara y
                 // un solo tracking. El ARSCNView se desengancha para que no
                 // haya dos renderers peleando por la sesión (y su delegate).
-                sceneView.session = nil
+                // (no se puede desasignar la sesión: queda oculto y sin usar)
                 realityRenderer.attach(session: arSession)
             } else {
                 sceneView.session = arSession

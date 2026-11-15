@@ -45,7 +45,6 @@ class RealityPanelEntity: Entity {
             material.color = .init(tint: UIColor(white: 0.10, alpha: 1), texture: nil)
         }
         // El panel se puede mirar de costado y de atrás sin desaparecer.
-        material.faceCulling = .none
 
         addChild(ModelEntity(mesh: mesh, materials: [material]))
     }
