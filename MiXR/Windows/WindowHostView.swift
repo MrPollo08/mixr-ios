@@ -42,7 +42,8 @@ final class WindowHostView: UIView {
         let view = SpatialWindowView(title: kind.title,
                                      bodyAspect: kind.aspect,
                                      showsLinkButton: kind.showsLinkButton,
-                                     showsCloseButton: kind.showsCloseButton)
+                                     showsCloseButton: kind.showsCloseButton,
+                                     chromeless: kind.chromeless)
         view.isHidden = true
 
         let window = SpatialWindow(kind: kind,
@@ -64,18 +65,18 @@ final class WindowHostView: UIView {
             }
         }
 
-        if let menu = content as? MenuContentView {
+        if let pressable = content as? SpatialPressable {
             window.pressAt = { [weak self, weak menu, weak view] point in
                 guard let self, let menu, let view else { return false }
-                return menu.press(atLocal: view.convert(point, from: self))
+                return pressable.press(atLocal: view.convert(point, from: self))
             }
             window.hoverAt = { [weak self, weak menu, weak view] point, dt in
                 guard let self, let menu, let view else { return }
                 guard let point else {
-                    menu.updatePointer(atLocal: nil, dt: dt)
+                    pressable.updatePointer(atLocal: nil, dt: dt)
                     return
                 }
-                menu.updatePointer(atLocal: view.convert(point, from: self), dt: dt)
+                pressable.updatePointer(atLocal: view.convert(point, from: self), dt: dt)
             }
         }
 

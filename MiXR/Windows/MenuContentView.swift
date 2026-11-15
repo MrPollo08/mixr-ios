@@ -1,6 +1,6 @@
 import UIKit
 
-/// Acción que se dispara al elegir un tile del menú flotante.
+/// Acción que se dispara al elegir un ícono del menú.
 enum MenuAction: CaseIterable {
     case pc
     case youtube
@@ -17,12 +17,12 @@ enum MenuAction: CaseIterable {
 
     var title: String {
         switch self {
-        case .pc: return "Pantalla PC"
+        case .pc: return "PC"
         case .youtube: return "YouTube"
         case .video: return "Videos"
         case .photos: return "Fotos"
-        case .web: return "Navegador"
-        case .control: return "Mouse PC"
+        case .web: return "Web"
+        case .control: return "Mouse"
         case .hands: return "Manos"
         case .occlusion: return "Oclusión"
         case .pin: return "Pegar"
@@ -49,7 +49,6 @@ enum MenuAction: CaseIterable {
         }
     }
 
-    /// Gradiente del tile, estilo home de Quest.
     var colors: [UIColor] {
         switch self {
         case .pc: return [UIColor(hex: 0x7C6CF0), UIColor(hex: 0x3B2FA8)]
@@ -77,14 +76,14 @@ extension UIColor {
     }
 }
 
-/// Tile con degradé e ícono. El nombre va **debajo**, fuera del tile.
-final class MenuTileView: UIView {
+/// Ícono circular con degradé, como el launcher espacial de Vision Pro.
+final class MenuIconView: UIView {
 
     let action: MenuAction
 
     private let gradient = CAGradientLayer()
-    private let progressView = UIView()
     private let icon = UIImageView()
+    private let progressFill = UIView()
 
     private var progress: CGFloat = 0
 
@@ -92,18 +91,17 @@ final class MenuTileView: UIView {
         self.action = action
         super.init(frame: .zero)
 
-        layer.cornerRadius = 10
-        layer.cornerCurve = .continuous
         layer.masksToBounds = true
+        layer.borderColor = UIColor.white.withAlphaComponent(0.9).cgColor
 
         gradient.colors = action.colors.map { $0.cgColor }
-        gradient.startPoint = CGPoint(x: 0, y: 0)
-        gradient.endPoint = CGPoint(x: 1, y: 1)
+        gradient.startPoint = CGPoint(x: 0.15, y: 0)
+        gradient.endPoint = CGPoint(x: 0.85, y: 1)
         layer.insertSublayer(gradient, at: 0)
 
-        progressView.backgroundColor = UIColor.white.withAlphaComponent(0.34)
-        progressView.isHidden = true
-        addSubview(progressView)
+        progressFill.backgroundColor = UIColor.white.withAlphaComponent(0.32)
+        progressFill.isHidden = true
+        addSubview(progressFill)
 
         icon.image = UIImage(systemName: action.symbol)
         icon.tintColor = .white
@@ -117,264 +115,183 @@ final class MenuTileView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         gradient.frame = bounds
+        layer.cornerRadius = min(bounds.width, bounds.height) / 2
         CATransaction.commit()
 
         let fill = bounds.height * progress
-        progressView.frame = CGRect(x: 0, y: bounds.height - fill,
+        progressFill.frame = CGRect(x: 0, y: bounds.height - fill,
                                     width: bounds.width, height: fill)
 
-        let iconSize = min(bounds.height * 0.52, bounds.width * 0.42)
+        let iconSize = bounds.width * 0.44
         icon.frame = CGRect(x: (bounds.width - iconSize) / 2,
                             y: (bounds.height - iconSize) / 2,
                             width: iconSize, height: iconSize)
     }
 
     func setHovered(_ hovered: Bool) {
-        layer.borderWidth = hovered ? 2.5 : 0
-        layer.borderColor = UIColor.white.withAlphaComponent(0.95).cgColor
-        transform = hovered ? CGAffineTransform(scaleX: 1.04, y: 1.04) : .identity
+        layer.borderWidth = hovered ? 3 : 0
+        transform = hovered ? CGAffineTransform(scaleX: 1.12, y: 1.12) : .identity
     }
 
-    /// 0…1: cuánto falta para que se abra.
     func setProgress(_ value: CGFloat) {
         let clamped = min(max(value, 0), 1)
-        guard abs(clamped - progress) > 0.005 else { return }
+        guard abs(clamped - progress) > 0.008 else { return }
         progress = clamped
-        progressView.isHidden = clamped < 0.01
+        progressFill.isHidden = clamped < 0.01
         setNeedsLayout()
     }
 
     func flash() {
-        transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
-        UIView.animate(withDuration: 0.18, delay: 0.08, options: [.curveEaseOut]) {
+        transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
+        UIView.animate(withDuration: 0.18, delay: 0.07, options: [.curveEaseOut]) {
             self.transform = .identity
         }
     }
 
     func resetProgress() {
         progress = 0
-        progressView.isHidden = true
+        progressFill.isHidden = true
         setNeedsLayout()
     }
 }
 
-/// Menú flotante estilo home de Quest: riel a la izquierda, barra con filtros
-/// arriba y grilla de tiles anchos con el nombre debajo.
+/// Menú espacial: grilla de íconos circulares flotando, sin panel.
 ///
-/// **Se elige apuntando con el dedo índice**: el tile se ilumina y una barra lo
-/// va llenando; al completarse, se abre. También con pinza o toque (instantáneo).
-final class MenuContentView: UIView {
+/// Se elige apuntando con el dedo índice (dwell), con pinza o con toque.
+final class MenuContentView: UIView, SpatialPressable {
 
     var onAction: ((MenuAction) -> Void)?
 
-    private let rail = UIView()
-    private var railIcons: [UIImageView] = []
-
-    private let titleLabel = UILabel()
-    private let chipAll = UILabel()
-    private let chipRecent = UILabel()
-
-    private var tiles: [MenuTileView] = []
+    private var icons: [MenuIconView] = []
     private var labels: [UILabel] = []
     private var cells: [CGRect] = []
 
-    private var focusedTile: MenuTileView?
-    private var firedTile: MenuTileView?
+    private var focusedIcon: MenuIconView?
+    private var firedIcon: MenuIconView?
     private var dwell: CGFloat = 0
-
-    /// Segundos que hay que dejar el dedo sobre un tile para abrirlo.
-    private var dwellTime: CGFloat = 0.6
+    private let dwellTime: CGFloat = 0.6
 
     private let columns = 4
-    private let inset: CGFloat = 8
-    private let spacing: CGFloat = 5
-    private let railWidth: CGFloat = 22
-    private let headerHeight: CGFloat = 15
-    private let labelHeight: CGFloat = 9
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
-        build()
+
+        for action in MenuAction.allCases {
+            let icon = MenuIconView(action: action)
+            addSubview(icon)
+            icons.append(icon)
+
+            let label = UILabel()
+            label.text = action.title
+            label.font = .systemFont(ofSize: 7.5, weight: .medium)
+            label.textColor = UIColor.white.withAlphaComponent(0.9)
+            label.textAlignment = .center
+            label.adjustsFontSizeToFitWidth = true
+            label.minimumScaleFactor = 0.6
+            label.layer.shadowColor = UIColor.black.cgColor
+            label.layer.shadowOpacity = 0.6
+            label.layer.shadowRadius = 3
+            label.layer.shadowOffset = CGSize(width: 0, height: 1)
+            addSubview(label)
+            labels.append(label)
+        }
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) no se usa")
     }
 
-    // MARK: - Construcción
-
-    private func build() {
-        rail.backgroundColor = UIColor.white.withAlphaComponent(0.045)
-        rail.layer.cornerRadius = 9
-        rail.layer.cornerCurve = .continuous
-        addSubview(rail)
-
-        for symbol in ["magnifyingglass", "square.grid.2x2.fill", "arrow.down.circle", "gearshape"] {
-            let imageView = UIImageView(image: UIImage(systemName: symbol))
-            imageView.tintColor = UIColor.white.withAlphaComponent(0.55)
-            imageView.contentMode = .scaleAspectFit
-            rail.addSubview(imageView)
-            railIcons.append(imageView)
-        }
-
-        titleLabel.text = "Todo"
-        titleLabel.font = .systemFont(ofSize: 12, weight: .bold)
-        titleLabel.textColor = .white
-        addSubview(titleLabel)
-
-        styleChip(chipAll, text: "Todos (\(MenuAction.allCases.count))", highlighted: true)
-        styleChip(chipRecent, text: "Recientes", highlighted: false)
-        addSubview(chipAll)
-        addSubview(chipRecent)
-
-        for action in MenuAction.allCases {
-            let tile = MenuTileView(action: action)
-            addSubview(tile)
-            tiles.append(tile)
-
-            let label = UILabel()
-            label.text = action.title
-            label.font = .systemFont(ofSize: 7.5, weight: .medium)
-            label.textColor = UIColor.white.withAlphaComponent(0.85)
-            label.textAlignment = .center
-            label.adjustsFontSizeToFitWidth = true
-            label.minimumScaleFactor = 0.6
-            addSubview(label)
-            labels.append(label)
-        }
-    }
-
-    private func styleChip(_ label: UILabel, text: String, highlighted: Bool) {
-        label.text = text
-        label.font = .systemFont(ofSize: 7.5, weight: .semibold)
-        label.textColor = highlighted ? .black : UIColor.white.withAlphaComponent(0.72)
-        label.textAlignment = .center
-        label.backgroundColor = highlighted
-            ? UIColor.white.withAlphaComponent(0.9)
-            : UIColor.white.withAlphaComponent(0.1)
-        label.layer.cornerRadius = 5
-        label.layer.masksToBounds = true
-    }
-
-    // MARK: - Layout
-
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        rail.frame = CGRect(x: inset, y: inset,
-                            width: railWidth,
-                            height: max(0, bounds.height - inset * 2))
+        let rows = max(1, Int(ceil(Double(icons.count) / Double(columns))))
+        let gap: CGFloat = 4
+        let cellWidth = (bounds.width - gap * CGFloat(columns - 1)) / CGFloat(columns)
+        let cellHeight = (bounds.height - gap * CGFloat(rows - 1)) / CGFloat(rows)
+        guard cellWidth > 8, cellHeight > 8 else { return }
 
-        let iconSize: CGFloat = 11
-        for (index, imageView) in railIcons.enumerated() {
-            imageView.frame = CGRect(x: (railWidth - iconSize) / 2,
-                                     y: 10 + CGFloat(index) * 20,
-                                     width: iconSize, height: iconSize)
-        }
-
-        let contentX = rail.frame.maxX + 6
-        let contentWidth = bounds.width - contentX - inset
-        guard contentWidth > 20 else { return }
-
-        titleLabel.frame = CGRect(x: contentX, y: inset - 2, width: 60, height: headerHeight)
-        chipAll.frame = CGRect(x: bounds.width - inset - 96, y: inset, width: 52, height: 12)
-        chipRecent.frame = CGRect(x: bounds.width - inset - 40, y: inset, width: 40, height: 12)
-
-        let rows = max(1, Int(ceil(Double(tiles.count) / Double(columns))))
-        let gridY = inset + headerHeight + 2
-        let availableHeight = bounds.height - gridY - inset
-        guard availableHeight > 20 else { return }
-
-        let tileWidth = (contentWidth - spacing * CGFloat(columns - 1)) / CGFloat(columns)
-        let cellHeight = (availableHeight - spacing * CGFloat(rows - 1)) / CGFloat(rows)
-        let tileHeight = max(12, cellHeight - labelHeight - 1)
+        let labelHeight: CGFloat = 10
+        let diameter = min(cellWidth, cellHeight - labelHeight - 2)
 
         cells.removeAll(keepingCapacity: true)
 
-        for (index, tile) in tiles.enumerated() {
+        for (index, icon) in icons.enumerated() {
             let column = index % columns
             let row = index / columns
-            let x = contentX + CGFloat(column) * (tileWidth + spacing)
-            let y = gridY + CGFloat(row) * (cellHeight + spacing)
+            let cellX = CGFloat(column) * (cellWidth + gap)
+            let cellY = CGFloat(row) * (cellHeight + gap)
 
-            tile.frame = CGRect(x: x, y: y, width: tileWidth, height: tileHeight)
-            labels[index].frame = CGRect(x: x, y: y + tileHeight + 1,
-                                         width: tileWidth, height: labelHeight)
-            cells.append(CGRect(x: x, y: y, width: tileWidth, height: cellHeight))
+            icon.bounds = CGRect(x: 0, y: 0, width: diameter, height: diameter)
+            icon.center = CGPoint(x: cellX + cellWidth / 2, y: cellY + diameter / 2)
+            icon.setNeedsLayout()
+
+            labels[index].frame = CGRect(x: cellX, y: cellY + diameter + 1,
+                                         width: cellWidth, height: labelHeight)
+
+            cells.append(CGRect(x: cellX, y: cellY, width: cellWidth, height: cellHeight))
         }
     }
 
     // MARK: - Elegir con el dedo
 
-    /// El dedo índice apunta; si se queda quieto sobre un tile, se abre.
     func updatePointer(atLocal point: CGPoint?, dt: CGFloat) {
-        guard let point, let tile = tile(at: point, preferring: focusedTile) else {
+        guard let point, let icon = icon(at: point) else {
             clearFocus()
             return
         }
 
-        if let fired = firedTile, fired !== tile {
+        if let fired = firedIcon, fired !== icon {
             fired.resetProgress()
-            firedTile = nil
+            firedIcon = nil
         }
 
-        if tile !== focusedTile {
-            focusedTile?.setProgress(0)
-            focusedTile?.setHovered(false)
-            focusedTile = tile
-            tile.setHovered(true)
+        if icon !== focusedIcon {
+            focusedIcon?.setProgress(0)
+            focusedIcon?.setHovered(false)
+            focusedIcon = icon
+            icon.setHovered(true)
             dwell = 0
         }
 
-        // Este ya se abrió: esperamos a que el dedo salga.
-        if firedTile === tile { return }
+        if firedIcon === icon { return }
 
         dwell = min(1, dwell + dt / max(dwellTime, 0.1))
-        tile.setProgress(dwell)
+        icon.setProgress(dwell)
 
         if dwell >= 1 {
-            firedTile = tile
-            tile.flash()
-            onAction?(tile.action)
+            firedIcon = icon
+            icon.flash()
+            onAction?(icon.action)
         }
     }
 
-    /// Aprieta el tile que está en ese punto (pinza o toque). Devuelve true si consumió el gesto.
     func press(atLocal point: CGPoint) -> Bool {
-        guard let tile = tile(at: point) else { return false }
-        tile.flash()
-        firedTile = tile
-        onAction?(tile.action)
+        guard let icon = icon(at: point) else { return false }
+        icon.flash()
+        firedIcon = icon
+        onAction?(icon.action)
         return true
     }
 
     private func clearFocus() {
-        focusedTile?.setProgress(0)
-        focusedTile?.setHovered(false)
-        focusedTile = nil
+        focusedIcon?.setProgress(0)
+        focusedIcon?.setHovered(false)
+        focusedIcon = nil
         dwell = 0
-        if firedTile != nil {
-            firedTile?.resetProgress()
-            firedTile = nil
+        if firedIcon != nil {
+            firedIcon?.resetProgress()
+            firedIcon = nil
         }
     }
 
-    /// Tile bajo el dedo, con margen y "imán" al más cercano para que no cueste acertar.
-    /// Si ya hay uno enfocado, se mantiene mientras el dedo no salga (sticky).
-    private func tile(at point: CGPoint, preferring current: MenuTileView? = nil) -> MenuTileView? {
-        if let current,
-           let index = tiles.firstIndex(where: { $0 === current }),
-           index < cells.count,
-           cells[index].insetBy(dx: 3, dy: 2).contains(point) {
-            return current
-        }
-
-        for (index, cell) in cells.enumerated() where index < tiles.count {
-            if cell.insetBy(dx: -4, dy: -3).contains(point) { return tiles[index] }
+    private func icon(at point: CGPoint) -> MenuIconView? {
+        for (index, cell) in cells.enumerated() where index < icons.count {
+            if cell.insetBy(dx: -3, dy: -2).contains(point) { return icons[index] }
         }
 
         var closestIndex: Int?
@@ -386,7 +303,7 @@ final class MenuContentView: UIView {
                 closestIndex = index
             }
         }
-        if let index = closestIndex, closestDistance <= 26 { return tiles[index] }
+        if let index = closestIndex, closestDistance <= 26 { return icons[index] }
         return nil
     }
 }

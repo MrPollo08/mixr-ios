@@ -10,12 +10,14 @@ enum WindowKind {
     case pcStream(port: UInt16)
     /// Menú flotante de la app (se aprieta con la pinza).
     case menu
+    /// Teclado flotante que escribe en la PC.
+    case keyboard
 
     var initialURL: URL? {
         switch self {
         case .video(let url): return url
         case .web(let url): return url
-        case .pcStream, .menu: return nil
+        case .pcStream, .menu, .keyboard: return nil
         }
     }
 
@@ -25,6 +27,7 @@ enum WindowKind {
         case .web: return "Web"
         case .pcStream: return "Pantalla del PC"
         case .menu: return "MiXR"
+        case .keyboard: return "Teclado"
         }
     }
 
@@ -34,7 +37,8 @@ enum WindowKind {
         case .video: return 16.0 / 9.0
         case .web: return 1.0
         case .pcStream: return 16.0 / 9.0
-        case .menu: return 1.45
+        case .menu: return 1.30
+        case .keyboard: return 1.55
         }
     }
 
@@ -42,8 +46,14 @@ enum WindowKind {
     var showsLinkButton: Bool {
         switch self {
         case .video, .web: return true
-        case .pcStream, .menu: return false
+        case .pcStream, .menu, .keyboard: return false
         }
+    }
+
+    /// El menú flota sin panel: sólo los íconos.
+    var chromeless: Bool {
+        if case .menu = self { return true }
+        return false
     }
 
     /// El menú no se puede cerrar: es la página principal.
@@ -60,6 +70,7 @@ enum WindowKind {
         case .web(let url): return WebContentView(url: url)
         case .pcStream(let port): return StreamContentView(port: port)
         case .menu: return MenuContentView()
+        case .keyboard: return KeyboardContentView()
         }
     }
 }

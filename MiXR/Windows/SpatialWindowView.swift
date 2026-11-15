@@ -19,6 +19,7 @@ final class SpatialWindowView: UIView {
     private var bodyAspect: CGFloat
     private let showsLinkButton: Bool
     private let showsCloseButton: Bool
+    private let chromeless: Bool
 
     private let card = UIView()
     private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
@@ -35,10 +36,11 @@ final class SpatialWindowView: UIView {
                height: Self.baseWidth / bodyAspect + Self.headerHeight)
     }
 
-    init(title: String, bodyAspect: CGFloat, showsLinkButton: Bool, showsCloseButton: Bool = true) {
+    init(title: String, bodyAspect: CGFloat, showsLinkButton: Bool, showsCloseButton: Bool = true, chromeless: Bool = false) {
         self.bodyAspect = bodyAspect
         self.showsLinkButton = showsLinkButton
         self.showsCloseButton = showsCloseButton
+        self.chromeless = chromeless
         super.init(frame: CGRect(x: 0, y: 0,
                                  width: Self.baseWidth,
                                  height: Self.baseWidth / bodyAspect + Self.headerHeight))
@@ -55,6 +57,14 @@ final class SpatialWindowView: UIView {
         backgroundColor = .clear
         isOpaque = false
         clipsToBounds = false
+
+        if chromeless {
+            contentContainer.frame = bounds
+            contentContainer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            contentContainer.backgroundColor = .clear
+            addSubview(contentContainer)
+            return
+        }
 
         card.frame = bounds
         card.autoresizingMask = [.flexibleWidth, .flexibleHeight]
