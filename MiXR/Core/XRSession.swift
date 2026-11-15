@@ -48,7 +48,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     @Published var pcHost: String?
 
     @Published private(set) var cameraMode: CameraMode = XRSession.savedMode()
-    @Published private(set) var occlusionEnabled = true
+    @Published private(set) var occlusionEnabled = false
     /// Modo VR: la escena se dibuja dos veces, una por ojo.
     @Published var stereoEnabled = true {
         didSet { if stereoEnabled != oldValue { applyStereoMode() } }

@@ -196,7 +196,9 @@ final class GestureEngine {
 
         // El menú no se puede cerrar, pero sí mover: si la pinza cae en un tile,
         // se aprieta; si cae en el panel, se arrastra como cualquier ventana.
-        if let press = window.pressAt, press(point) {
+        // Elegir es solo con el cursor (dwell) o con el dedo en pantalla:
+        // la pinza ya no selecciona, se usa para agarrar/mover ventanas.
+        if window.pressAt != nil {
             return
         }
 
