@@ -217,6 +217,12 @@ final class WindowHostView: UIView {
             return
         }
 
+        // De espaldas: el panel no se dibuja (es un objeto, no un HUD).
+        if isFacingAway(window: window, pose: pose) {
+            window.view.isHidden = true
+            return
+        }
+
         // Preferimos la proyección del renderer del fondo (SceneKit).
         var center = projection.center
         var pointsPerMeter = projection.pointsPerMeter
