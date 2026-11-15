@@ -307,6 +307,12 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                 : []
             arSession.run(configuration, options: options)
 
+            // Ambiente 360: el video de tormenta como fondo del cuarto.
+            if sceneView.scene.rootNode.childNode(withName: "skyboxVideo", recursively: false) == nil,
+               let url = Bundle.main.url(forResource: "stormy-ocean", withExtension: "mp4") {
+                sceneView.scene.rootNode.addChildNode(SkyboxVideoNode(url: url))
+            }
+
             // Panel 3D de prueba: objeto real en el mundo (se puede rodear).
             // En RealityKit ese panel ya es una entidad de la escena.
             if !Self.useRealityKit,
@@ -579,6 +585,13 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
         guard let pose else { return }
         lastPose = pose
+
+        // El fondo 360 acompaña a la cámara (no se puede rodear).
+        if let sky = sceneView.scene.rootNode.childNode(withName: "skyboxVideo", recursively: false) as? SkyboxVideoNode {
+            sky.follow(simd_float3(pose.transform.columns.3.x,
+                                    pose.transform.columns.3.y,
+                                    pose.transform.columns.3.z))
+        }
 
         // El proyector sale del renderer del fondo: mismas matemáticas que la
         // imagen de la cámara, así la ventana no puede "nadar" al moverte.
