@@ -169,7 +169,7 @@ final class MenuContentView: UIView, SpatialPressable {
     private var focusedIcon: MenuIconView?
     private var firedIcon: MenuIconView?
     private var dwell: CGFloat = 0
-    private let dwellTime: CGFloat = 0.6
+    private let dwellTime: CGFloat = 7.0
 
     private let columns = 4
 

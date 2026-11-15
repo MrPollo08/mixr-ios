@@ -11,6 +11,8 @@ final class HandOverlayView: UIView {
     private let dotLayer = CAShapeLayer()
     private let palmButtonLayer = CAShapeLayer()
     private let pointerLayer = CAShapeLayer()
+    /// El puntero (rayito) sólo se dibuja cuando se apunta a algo.
+    private var pointerVisible = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -47,20 +49,33 @@ final class HandOverlayView: UIView {
 
     /// Aro de puntería (modo control / hover sobre un botón).
     func setPointer(_ point: CGPoint?) {
-        guard let point else {
-            pointerLayer.path = nil
-            return
-        }
-        let radius: CGFloat = 11
-        pointerLayer.path = UIBezierPath(ovalIn: CGRect(x: point.x - radius,
-                                                        y: point.y - radius,
-                                                        width: radius * 2,
-                                                        height: radius * 2)).cgPath
+        pointerVisible = (point != nil)
     }
-
     func render(poses: [HandPose]) {
         // Sin gráficos sobre la mano: sólo el ☰ de la palma.
         dotLayer.path = nil
+
+        // Rayito desde el dedo con un punto en la punta (para elegir apps).
+        if pointerVisible, let pose = poses.first,
+           let tip = pose.joints[.indexTip] {
+            let base = pose.joints[.indexMCP] ?? pose.joints[.wrist] ?? tip
+            let dx = tip.x - base.x
+            let dy = tip.y - base.y
+            let length = max(hypot(dx, dy), 1)
+            let end = CGPoint(x: tip.x + dx / length * 46, y: tip.y + dy / length * 46)
+
+            let ray = UIBezierPath()
+            ray.move(to: base)
+            ray.addLine(to: end)
+            ray.append(UIBezierPath(ovalIn: CGRect(x: end.x - 5, y: end.y - 5,
+                                                    width: 10, height: 10)))
+            pointerLayer.path = ray.cgPath
+            pointerLayer.fillColor = UIColor.white.cgColor
+            pointerLayer.lineWidth = 2
+            pointerLayer.strokeColor = UIColor.white.withAlphaComponent(0.95).cgColor
+        } else {
+            pointerLayer.path = nil
+        }
 
         // ☰ en la palma, sólo con la mano abierta.
         if let open = poses.first(where: { $0.openPalm }),
