@@ -143,7 +143,6 @@ final class HandTracker {
             let closedFist = Self.isClosedFist(joints)
             let palmCenter = CGPoint(x: (wrist.x + middle.x) / 2, y: (wrist.y + middle.y) / 2)
             poses.append(HandPose(key: key, joints: joints, pinchPoint: pinchPoint,
-                                  pinch: pinch, openPalm: openPalm))
                                   pinch: pinch, openPalm: openPalm,
                                   closedFist: closedFist, palmCenter: palmCenter))
         }
