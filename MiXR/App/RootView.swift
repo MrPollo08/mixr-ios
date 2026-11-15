@@ -27,8 +27,14 @@ struct RootView: View {
                 action("Fijar en mesa", symbol: "square.dashed", filled: false) {
                     session.snapMonitorToSurface()
                 }
+                action("Guardar lugar", symbol: "square.and.arrow.down", filled: false) {
+                    session.savePlace()
+                }
                 action("Centrar", symbol: "scope", filled: false) {
                     session.centerMonitor()
+                }
+                action(session.framingName, symbol: "arrow.up.left.and.arrow.down.right", filled: false) {
+                    session.cycleFraming()
                 }
                 action(session.mouseEnabled ? "Mouse ON" : "Mouse",
                        symbol: "cursorarrow",

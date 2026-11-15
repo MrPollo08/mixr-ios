@@ -15,6 +15,12 @@ final class CameraSampleView: UIView {
     private var format: CMVideoFormatDescription?
     private var formatKey = 0
 
+    /// Cómo se encaja la imagen en la vista (fill = recorta, aspect = entra toda).
+    var videoGravity: AVLayerVideoGravity {
+        get { displayLayer.videoGravity }
+        set { displayLayer.videoGravity = newValue }
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .black

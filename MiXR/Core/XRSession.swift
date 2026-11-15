@@ -2,7 +2,6 @@ import ARKit
 import Combine
 import CoreVideo
 import Foundation
-import SceneKit
 import SwiftUI
 import UIKit
 import Vision
@@ -11,8 +10,10 @@ import simd
 /// Dreamspace (monitor): un monitor grande de la PC clavado en el mundo real.
 ///
 /// - ARKit 6DoF (una sola cámara: sin cambios, sin parpadeo).
-/// - «Fijar en mesa»: escanea el plano, toma coordenadas del mundo y deja el
-///   monitor anclado ahí para siempre (ARAnchor).
+/// - «Ver más»: muestra más campo de la cámara (zoom out por software) para que
+///   el cuarto se sienta lejos y no "pegado a la cara".
+/// - «Fijar en mesa»: escanea el plano y deja el monitor anclado ahí (ARAnchor).
+/// - «Guardar lugar»: ARWorldMap + coordenadas; al volver, aparece solo.
 /// - Manos: pinza en el borde = mover · dos pinzas = tamaño.
 final class XRSession: NSObject, ObservableObject {
 
@@ -22,10 +23,36 @@ final class XRSession: NSObject, ObservableObject {
     @Published var status = "Tocá «Monitor PC» para empezar"
     @Published var localAddress = LocalIP.wifiAddress() ?? "sin Wi-Fi"
     @Published var mouseEnabled = false
+    /// 0 = normal (llena), 1 = amplio, 2 = cámara completa (más lejos).
+    @Published var framing = 1 {
+        didSet { if framing != oldValue { status = framingName } }
+    }
+
+    var framingName: String {
+        switch framing {
+        case 0: return "Vista normal"
+        case 1: return "Vista amplia"
+        default: return "Cámara completa"
+        }
+    }
+
+    /// Qué fracción del alto de la cámara se ve en pantalla (más chico = más
+    /// lejos se ve el mundo).
+    private var visibleFraction: CGFloat {
+        switch framing {
+        case 0: return 0.615
+        case 1: return 0.78
+        default: return 1.0
+        }
+    }
 
     // MARK: - Vistas
 
-    let sceneView = ARSCNView()
+    /// Fondo (llenando, atenuado) para los laterales cuando la cámara no llena.
+    let backdrop = CameraSampleView()
+    private let dim = UIView()
+    /// Cámara nítida, en el rectángulo que corresponde.
+    let camera = CameraSampleView()
     let hostView = WindowHostView()
     let overlay = HandOverlayView()
 
@@ -45,24 +72,28 @@ final class XRSession: NSObject, ObservableObject {
     private var lastHands: [HandPose] = []
     private weak var monitor: SpatialWindow?
     private var wasDragging = false
-    /// El mando está moviendo el monitor (no se re-ancla en el medio).
     private var gamepadMoving = false
+    private var mapLoaded = false
+    private var restoredMonitor = false
 
     lazy var containerView: UIView = {
         let view = UIView(frame: .zero)
         view.backgroundColor = .black
         view.clipsToBounds = true
 
-        for subview in [sceneView, hostView, overlay] as [UIView] {
+        dim.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        backdrop.videoGravity = .resizeAspectFill
+        camera.videoGravity = .resize
+
+        for subview in [backdrop, dim, camera, hostView, overlay] as [UIView] {
             subview.frame = view.bounds
-            subview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            subview.autoresizingMask = []
             view.addSubview(subview)
         }
 
         hostView.session = self
         overlay.isUserInteractionEnabled = false
         overlay.showsSkeleton = false
-        sceneView.isUserInteractionEnabled = false
         return view
     }()
 
@@ -103,14 +134,14 @@ final class XRSession: NSObject, ObservableObject {
 
         let configuration = ARWorldTrackingConfiguration()
         configuration.worldAlignment = .gravity
-        // Escanear superficies (mesa, piso): de acá salen las coordenadas fijas.
         configuration.planeDetection = [.horizontal]
         configuration.isLightEstimationEnabled = false
         configuration.environmentTexturing = .none
 
-        sceneView.session = arSession
-        sceneView.automaticallyUpdatesLighting = false
-        sceneView.antialiasingMode = .none
+        if let map = loadWorldMap() {
+            configuration.initialWorldMap = map
+            mapLoaded = true
+        }
 
         arSession.run(configuration,
                       options: arStarted ? [] : [.resetTracking, .removeExistingAnchors])
@@ -161,7 +192,11 @@ final class XRSession: NSObject, ObservableObject {
     /// Sin uso en esta versión (la ventana base lo declara).
     func promptForURL(title: String, message: String, current: URL?, completion: @escaping (URL) -> Void) {}
 
-    /// Trae el monitor delante de la cámara y lo re-ancla ahí.
+    /// Cambia cuánto campo de visión se ve (zoom out por software).
+    func cycleFraming() {
+        framing = (framing + 1) % 3
+    }
+
     func centerMonitor() {
         guard let monitor else { return }
         hostView.setPosition(monitor, positionInFront(distance: 1.6), force: true)
@@ -169,37 +204,33 @@ final class XRSession: NSObject, ObservableObject {
         reanchor(monitor)
     }
 
-    /// **Escanea la mesa y fija el monitor ahí**: usa el plano detectado por
-    /// ARKit y guarda coordenadas del mundo. Queda clavado para siempre.
+    /// Escanea la mesa y fija el monitor ahí: coordenadas reales del plano.
     func snapMonitorToSurface() {
         guard let monitor else {
             status = "Primero abrí el monitor (Monitor PC)"
             return
         }
+        guard let frame = arSession.currentFrame else { return }
 
-        let viewport = containerView.bounds.size
+        let viewport = hostView.bounds.size
         let center = CGPoint(x: viewport.width / 2, y: viewport.height / 2)
-        let results = sceneView.hitTest(center,
-                                        types: [.existingPlaneUsingExtent,
-                                                .existingPlane,
-                                                .estimatedHorizontalPlane])
+        let results = frame.hitTest(center,
+                                    types: [.existingPlaneUsingExtent,
+                                            .existingPlane,
+                                            .estimatedHorizontalPlane])
         guard let hit = results.first else {
             status = "No veo la superficie: mové el iPhone unos segundos sobre la mesa"
             return
         }
 
         let t = hit.worldTransform.columns.3
-        // El centro del panel, 30 cm arriba de la mesa (queda apoyado a la vista).
         let base = simd_float3(t.x, t.y, t.z)
         let position = base + simd_float3(0, 0.30, 0)
 
-        // Mira hacia la cámara.
         if let pose = lastPose {
             let c = pose.transform.columns.3
-            let camera = simd_float3(c.x, c.y, c.z)
-            let direction = camera - position
-            let length = simd_length(direction)
-            if length > 0.1 {
+            let direction = simd_float3(c.x, c.y, c.z) - position
+            if simd_length(direction) > 0.1 {
                 monitor.normal = simd_normalize(direction)
             }
         }
@@ -210,6 +241,85 @@ final class XRSession: NSObject, ObservableObject {
 
         let distance = lastPose?.project(position)?.depth ?? 0
         status = String(format: "Fijado en la mesa (%.1f m). Queda clavado ahí.", distance)
+    }
+
+    // MARK: - Mapa del lugar (pre-escaneo)
+
+    private var mapURL: URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("dreamspace.worldmap")
+    }
+
+    private func loadWorldMap() -> ARWorldMap? {
+        guard let mapURL, let data = try? Data(contentsOf: mapURL) else { return nil }
+        return try? NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data)
+    }
+
+    /// Guarda el mapa del lugar **y** dónde quedó el monitor.
+    func savePlace() {
+        guard let monitor else {
+            status = "Primero abrí el monitor (Monitor PC)"
+            return
+        }
+        persist(monitor)
+
+        arSession.getCurrentWorldMap { [weak self] map, error in
+            guard let self else { return }
+            guard let map, let mapURL = self.mapURL else {
+                DispatchQueue.main.async {
+                    self.status = error?.localizedDescription
+                        ?? "No pude guardar el mapa: mové el iPhone por la mesa unos segundos"
+                }
+                return
+            }
+            do {
+                let data = try NSKeyedArchiver.archivedData(withRootObject: map,
+                                                            requiringSecureCoding: true)
+                try data.write(to: mapURL)
+                DispatchQueue.main.async {
+                    self.status = "Lugar guardado: la próxima vez el monitor aparece acá solo"
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.status = "No pude escribir el mapa: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func persist(_ window: SpatialWindow) {
+        let defaults = UserDefaults.standard
+        let p = window.position
+        let n = window.normal
+        defaults.set(Double(p.x), forKey: "dreamspace.monitor.x")
+        defaults.set(Double(p.y), forKey: "dreamspace.monitor.y")
+        defaults.set(Double(p.z), forKey: "dreamspace.monitor.z")
+        defaults.set(Double(window.physicalWidth), forKey: "dreamspace.monitor.width")
+        defaults.set(Double(n.x), forKey: "dreamspace.monitor.nx")
+        defaults.set(Double(n.y), forKey: "dreamspace.monitor.ny")
+        defaults.set(Double(n.z), forKey: "dreamspace.monitor.nz")
+    }
+
+    private func restoreSavedMonitor() {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: "dreamspace.monitor.x") != nil else { return }
+        if let monitor, hostView.windows.contains(where: { $0 === monitor }) { return }
+
+        let position = simd_float3(Float(defaults.double(forKey: "dreamspace.monitor.x")),
+                                   Float(defaults.double(forKey: "dreamspace.monitor.y")),
+                                   Float(defaults.double(forKey: "dreamspace.monitor.z")))
+        let width = CGFloat(defaults.double(forKey: "dreamspace.monitor.width"))
+        let normal = simd_float3(Float(defaults.double(forKey: "dreamspace.monitor.nx")),
+                                 Float(defaults.double(forKey: "dreamspace.monitor.ny")),
+                                 Float(defaults.double(forKey: "dreamspace.monitor.nz")))
+
+        let window = hostView.add(kind: .pcStream(port: Config.streamPort),
+                                  position: position,
+                                  physicalWidth: width > 0.2 ? width : 0.85)
+        window.normal = simd_length(normal) > 0.1 ? normal : window.normal
+        monitor = window
+        anchor(window)
+        status = "Monitor restaurado del lugar guardado"
     }
 
     // MARK: - Anclajes
@@ -232,8 +342,6 @@ final class XRSession: NSObject, ObservableObject {
         anchor(window)
     }
 
-    /// ARKit corrige el origen del mundo al re-localizar: el ancla manda, así la
-    /// ventana sigue clavada en el lugar real.
     private func syncAnchors(dragging: Bool) {
         for window in hostView.windows {
             if window.anchor == nil { anchor(window) }
@@ -250,29 +358,61 @@ final class XRSession: NSObject, ObservableObject {
 
     @objc private func tick() {
         guard isRunning else { return }
-        let viewport = containerView.bounds.size
-        guard viewport.width > 1, viewport.height > 1 else { return }
+        let screen = containerView.bounds.size
+        guard screen.width > 1, screen.height > 1 else { return }
         guard let frame = arSession.currentFrame else { return }
 
         let orientation = ScreenOrientation.current
         let imageSize = CGSize(width: CVPixelBufferGetWidth(frame.capturedImage),
                                height: CVPixelBufferGetHeight(frame.capturedImage))
+        let aspect = ScreenOrientation.displayAspect(raw: imageSize, orientation: orientation)
+
+        // Rectángulo de la cámara: con "ver más" se agranda y se ven más grados.
+        let rect = Self.cameraRect(aspect: aspect, screen: screen, fraction: visibleFraction)
+
+        camera.frame = rect
+        hostView.bounds = CGRect(origin: .zero, size: rect.size)
+        hostView.center = CGPoint(x: rect.midX, y: rect.midY)
+        overlay.bounds = hostView.bounds
+        overlay.center = hostView.center
+
+        camera.enqueue(frame.capturedImage)
+        backdrop.enqueue(frame.capturedImage)
+
         let pose = CameraPose(arkitCamera: frame.camera,
                               orientation: orientation,
-                              viewport: viewport,
+                              viewport: rect.size,
                               imageSize: imageSize)
         lastPose = pose
+
+        // Si había un lugar guardado y ya re-localizó, aparece el monitor solo.
+        if mapLoaded, !restoredMonitor, case .normal = frame.camera.trackingState {
+            restoredMonitor = true
+            restoreSavedMonitor()
+        }
 
         overlay.render(poses: lastHands)
         hostView.layout(pose: pose)
         updateGamepad(pose: pose)
 
         tracker.submit(pixelBuffer: frame.capturedImage,
-                       viewportSize: viewport,
-                       imageAspect: pose.imageAspect,
+                       viewportSize: rect.size,
+                       imageAspect: aspect,
                        orientation: ScreenOrientation.visionOrientation(for: orientation)) { [weak self] poses in
             DispatchQueue.main.async { self?.apply(poses, pose: pose) }
         }
+    }
+
+    private static func cameraRect(aspect: CGFloat,
+                                   screen: CGSize,
+                                   fraction: CGFloat) -> CGRect {
+        guard aspect > 0.1, screen.width > 1 else { return CGRect(origin: .zero, size: screen) }
+        let height = screen.height / max(fraction, 0.2)
+        let width = height * aspect
+        return CGRect(x: (screen.width - width) / 2,
+                      y: (screen.height - height) / 2,
+                      width: width,
+                      height: height)
     }
 
     private func apply(_ poses: [HandPose], pose: CameraPose) {
@@ -282,13 +422,12 @@ final class XRSession: NSObject, ObservableObject {
         hostView.allowsPositionWrites = true
 
         if mouseEnabled {
-            overlay.setPointer(pointer.update(poses: poses, viewport: containerView.bounds.size))
+            overlay.setPointer(pointer.update(poses: poses, viewport: hostView.bounds.size))
             return
         }
 
         gestures.update(poses: poses, host: hostView, pose: pose)
 
-        // Al soltar, el ancla se muda a donde quedó: no se mueve más.
         if wasDragging, !gestures.isDragging, let monitor {
             reanchor(monitor)
         }
