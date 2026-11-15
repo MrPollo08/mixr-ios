@@ -164,6 +164,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         }
 
         applyModeVisibility()
+        applyStereoMode()
         return view
     }()
 
