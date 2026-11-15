@@ -695,6 +695,24 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         debugText = text
     }
 
+    /// Pasa los puntos de la mano al espacio de un host (en VR las mitades
+    /// están escaladas y centradas, así que hay que convertir).
+    private func convertedPoses(_ poses: [HandPose], to host: UIView) -> [HandPose] {
+        poses.map { pose in
+            var joints: [VNHumanHandPoseObservation.JointName: CGPoint] = [:]
+            for (name, point) in pose.joints {
+                joints[name] = host.convert(point, from: containerView)
+            }
+            return HandPose(key: pose.key,
+                            joints: joints,
+                            pinchPoint: host.convert(pose.pinchPoint, from: containerView),
+                            pinch: pose.pinch,
+                            openPalm: pose.openPalm,
+                            closedFist: pose.closedFist,
+                            palmCenter: host.convert(pose.palmCenter, from: containerView),
+                            confidence: pose.confidence)
+        }
+    }
     private func apply(_ poses: [HandPose]) {
         lastHands = poses
         overlay.render(poses: poses)

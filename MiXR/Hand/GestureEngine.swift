@@ -39,6 +39,8 @@ final class GestureEngine {
     private let grace: TimeInterval = 0.45
 
     var isDragging: Bool { grabbed != nil }
+    /// Ventana que se está arrastrando (para el modo VR).
+    var grabbedWindow: SpatialWindow? { grabbed }
 
     /// Se dispara con **doble pinza al aire** (sin tocar ninguna ventana):
     /// sirve para traer el menú cuando se perdió de vista.
