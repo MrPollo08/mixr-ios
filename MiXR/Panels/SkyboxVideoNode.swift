@@ -8,6 +8,10 @@ import simd
 /// sigue a la cámara, así el ambiente queda "pegado" al mundo.
 final class SkyboxVideoNode: SCNNode {
 
+    /// Cuánto se corre la textura para llevar el horizonte del video al medio
+    /// de la esfera. 0.5 - 0.29 (el horizonte está al 29 % de la altura).
+    static let horizonOffset: Float = 0.21
+
     private let player = AVPlayer()
 
     init(url: URL) {
@@ -32,6 +36,15 @@ final class SkyboxVideoNode: SCNNode {
         material.lightingModel = .constant
         material.cullMode = .front
         material.isDoubleSided = true
+
+        // El video trae el horizonte a ~29 % de la altura (no al medio, como un
+        // equirectangular prolijo). Sin corregirlo, el horizonte queda 38° por
+        // encima de la línea de los ojos y sólo se ve mar. Se sube la textura
+        // para que el horizonte caiga justo en el ecuador de la esfera.
+        material.diffuse.wrapS = .repeat
+        material.diffuse.wrapT = .clampToEdge
+        material.diffuse.contentsTransform = SCNMatrix4MakeTranslation(0, Self.horizonOffset, 0)
+
         sphere.firstMaterial = material
 
         geometry = sphere
