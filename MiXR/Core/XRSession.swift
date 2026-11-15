@@ -82,6 +82,12 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private var lastPose: CameraPose?
     private var lastHands: [HandPose] = []
     private weak var menuWindow: SpatialWindow?
+    /// El buffer de la 0.5× que ARKit captura por dentro resultó ser una imagen
+    /// de **baja resolución** (pensada para tracking, no para mostrar): se veía
+    /// borrosa y sólo llegaba en algunos frames. Apagado: usamos la imagen
+    /// propia de ARKit, que es nítida y llega a 60 fps.
+    private static let useUltraWideImage = false
+
     /// Cuántas veces se lanzó ARKit y cuántos frames llegaron (diagnóstico).
     private var arkitRuns = 0
     private var frameCount = 0
@@ -229,9 +235,10 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
     private func applyModeVisibility() {
         wideView.isHidden = cameraMode != .ultraWide
+        sceneView.isHidden = cameraMode != .arkit
         occlusionView.isHidden = !occlusionEnabled
         if occlusionView.isHidden { occlusionView.clear() }
-        // sceneView / cameraImageView los decide el tick según qué imagen llegue.
+        // cameraSampleView queda oculto salvo que se use la imagen 0.5×.
     }
 
     // MARK: - Cambiar de cámara / oclusión
@@ -353,7 +360,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
                 let useUltraWide = ultraWideBuffer != nil && now - ultraWideAt < 0.5
 
-                if useUltraWide, let validUltraWide = ultraWideBuffer {
+                if Self.useUltraWideImage, useUltraWide, let validUltraWide = ultraWideBuffer {
                     // 6DoF de ARKit + imagen de la 0.5×, compuesta en GPU.
                     cameraSampleView.isHidden = false
                     sceneView.isHidden = true
@@ -380,7 +387,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                     buffer = frame.capturedImage
                 }
 
-                updateDebug(frame: frame, usingUltraWide: useUltraWide)
+                updateDebug(frame: frame, usingUltraWide: Self.useUltraWideImage && useUltraWide)
             }
 
         case .ultraWide:
