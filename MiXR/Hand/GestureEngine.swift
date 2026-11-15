@@ -31,6 +31,10 @@ final class GestureEngine {
     private var resizeStartWidth: CGFloat = 0
 
     private var latch: [String: Bool] = [:]
+    /// Cuántos frames seguidos la mano viene cerrada (debounce del agarre).
+    private var grabStreak: [String: Int] = [:]
+    private let grabFrames = 3
+    private let minConfidence: CGFloat = 0.55
     private var lastHoverAt: CFTimeInterval = 0
     private let grace: TimeInterval = 0.45
 
@@ -68,7 +72,14 @@ final class GestureEngine {
             let wasPinching = latch[hand.key] ?? false
             let threshold: CGFloat = wasPinching ? 0.55 : 0.78
             // Agarrede directo: se agarra cerrando el puño, no con pinza.
-            let isPinching = hand.closedFist
+            // Debounce: hace falta que el puño se sostenga varios frames.
+            if hand.closedFist, hand.confidence >= minConfidence {
+                grabStreak[hand.key, default: 0] += 1
+            } else {
+                grabStreak[hand.key] = 0
+            }
+            let stableGrab = (grabStreak[hand.key] ?? 0) >= grabFrames
+            let isPinching = stableGrab && hand.closedFist && hand.confidence >= minConfidence
             latch[hand.key] = isPinching
             if isPinching { pinching.append(hand) }
 
@@ -110,7 +121,15 @@ final class GestureEngine {
             palmFired = false
         }
 
+        let viewport = host.lastPose?.viewport ?? .zero
+        let safe = CGRect(origin: .zero, size: viewport).insetBy(dx: viewport.width * 0.06,
+                                                                 dy: viewport.height * 0.06)
+
         guard let window = grabbed else {
+            // Zona muerta: no se reacciona cerca de los bordes.
+            if safe.width > 1, pinching.contains(where: { !safe.contains(dragPoint($0)) }) {
+                return
+            }
             updateHover(poses: poses, host: host)
             if let first = pinching.first, let target = host.window(at: dragPoint(first)) {
                 begin(window: target, with: first, host: host)

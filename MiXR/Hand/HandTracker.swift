@@ -19,6 +19,8 @@ struct HandPose {
     let closedFist: Bool
     /// Centro de la palma en pantalla (punto de agarre).
     let palmCenter: CGPoint
+    /// Confianza mínima de los puntos clave (0…1).
+    let confidence: CGFloat
 }
 
 /// Detección de manos con Vision (21 articulaciones por mano, hasta 2 manos).
@@ -131,6 +133,12 @@ final class HandTracker {
             let ratio = hypot(thumb.x - index.x, thumb.y - index.y) / handSize
             var pinch = min(max(1 - ratio / 0.9, 0), 1)
 
+            // Confianza de los puntos que importan para el gesto.
+            var keyConfidence: CGFloat = 1
+            for name in [VNHumanHandPoseObservation.JointName.thumbTip, .indexTip, .middleMCP, .wrist] {
+                if let point = raw[name] { keyConfidence = min(keyConfidence, CGFloat(point.confidence)) }
+            }
+
             // Estándar Quest: la pinza sólo cuenta si el resto de los dedos
             // están relajados (medio, anular y meñique extendidos).
             // Distancia real (la mano mide ~9 cm de muñeca a nudillo).
@@ -145,6 +153,8 @@ final class HandTracker {
             poses.append(HandPose(key: key, joints: joints, pinchPoint: pinchPoint,
                                   pinch: pinch, openPalm: openPalm,
                                   closedFist: closedFist, palmCenter: palmCenter))
+                                  closedFist: closedFist, palmCenter: palmCenter,
+                                  confidence: keyConfidence))
         }
 
         let stale = smoothed.keys.filter { !seen.contains($0) }
