@@ -32,6 +32,10 @@ final class HandTracker {
     private let request = VNDetectHumanHandPoseRequest()
     private let sequence = VNSequenceRequestHandler()
     private var smoothed: [String: [VNHumanHandPoseObservation.JointName: CGPoint]] = [:]
+    /// Última pose por mano, para no hacer parpadear el esqueleto si Vision
+    /// pierde un frame.
+    private var lastPoses: [String: HandPose] = [:]
+    private var lastSeen: [String: CFTimeInterval] = [:]
     private var lastProcessedAt: CFTimeInterval = 0
     private var busy = false
 
@@ -127,11 +131,28 @@ final class HandTracker {
         let stale = smoothed.keys.filter { !seen.contains($0) }
         for key in stale { smoothed[key] = nil }
 
+        // Si una mano se perdió hace menos de 0,2 s, se sigue mostrando la
+        // última pose: evita el parpadeo del esqueleto y los cortes al arrastrar.
+        let now = CACurrentMediaTime()
+        for (key, stored) in lastPoses where !seen.contains(key) {
+            if now - (lastSeen[key] ?? 0) < 0.2 {
+                poses.append(stored)
+            }
+        }
+        for pose in poses where seen.contains(pose.key) {
+            lastPoses[pose.key] = pose
+            lastSeen[pose.key] = now
+        }
+        for key in lastPoses.keys where now - (lastSeen[key] ?? 0) > 0.5 {
+            lastPoses[key] = nil
+            lastSeen[key] = nil
+        }
+
         return poses
     }
 
-    /// Suavizado exponencial por articulación.
-    /// Alpha alto = sigue la mano de cerca (menos "arrastre" al moverla).
+    /// Suavizado adaptativo (tipo One Euro): cuando la mano está quieta suaviza
+    /// fuerte (sin temblor) y cuando se mueve rápido casi no filtra (sin lag).
     private func smooth(key: String,
                         name: VNHumanHandPoseObservation.JointName,
                         value: CGPoint) -> CGPoint {
@@ -141,7 +162,10 @@ final class HandTracker {
             smoothed[key] = store
             return value
         }
-        let alpha: CGFloat = 0.7
+
+        let speed = hypot(value.x - previous.x, value.y - previous.y)
+        let alpha = min(0.92, max(0.22, 0.22 + speed * 0.07))
+
         let result = CGPoint(x: previous.x + (value.x - previous.x) * alpha,
                              y: previous.y + (value.y - previous.y) * alpha)
         store[name] = result
