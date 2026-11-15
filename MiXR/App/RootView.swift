@@ -7,11 +7,40 @@ struct RootView: View {
     @ObservedObject var session: XRSession
 
     var body: some View {
+        if session.showsSetup {
+            SetupView(session: session)
+        } else {
+            camera
+        }
+    }
+
+    private var camera: some View {
         ZStack(alignment: .topLeading) {
             XRCameraView(session: session)
                 .ignoresSafeArea()
 
-            panel
+            if !session.stereoEnabled {
+                panel
+            }
+
+            // Volver al ajuste de los marcos, siempre accesible.
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Button {
+                        session.openSetup()
+                    } label: {
+                        Image(systemName: "eyeglasses")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(12)
+                            .background(Circle().fill(Color.black.opacity(0.55)))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(14)
+            }
         }
         .background(Color.black)
         .onAppear { session.start() }

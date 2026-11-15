@@ -46,6 +46,18 @@ final class XRSession: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Modo VR box
+
+    /// Se muestra la pantalla de ajuste de los marcos antes de la cámara.
+    @Published var showsSetup = true
+    @Published var stereoEnabled = false {
+        didSet { if stereoEnabled != oldValue { applyStereoMode() } }
+    }
+    /// Tamaño de cada ojo, separación y altura (se guardan).
+    @Published var vrScale: CGFloat = 0.5 { didSet { saveVRSettings() } }
+    @Published var vrSeparation: CGFloat = 20 { didSet { saveVRSettings() } }
+    @Published var vrVertical: CGFloat = 0 { didSet { saveVRSettings() } }
+
     // MARK: - Vistas
 
     /// Fondo (llenando, atenuado) para los laterales cuando la cámara no llena.
@@ -55,6 +67,11 @@ final class XRSession: NSObject, ObservableObject {
     let camera = CameraSampleView()
     let hostView = WindowHostView()
     let overlay = HandOverlayView()
+
+    // Dos mitades, una por ojo (VR box).
+    private let leftPane = StereoPane()
+    private let rightPane = StereoPane()
+    private let stereoRoot = UIView()
 
     // MARK: - Motor
 
@@ -94,6 +111,18 @@ final class XRSession: NSObject, ObservableObject {
         hostView.session = self
         overlay.isUserInteractionEnabled = false
         overlay.showsSkeleton = false
+
+        // VR box: dos mitades encima de todo.
+        stereoRoot.frame = view.bounds
+        stereoRoot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        stereoRoot.backgroundColor = .black
+        stereoRoot.isHidden = true
+        view.addSubview(stereoRoot)
+        stereoRoot.addSubview(leftPane)
+        stereoRoot.addSubview(rightPane)
+        leftPane.host.session = self
+        rightPane.host.session = self
+
         return view
     }()
 
@@ -101,6 +130,7 @@ final class XRSession: NSObject, ObservableObject {
         super.init()
         gamepad.onPrimary = { [weak self] in self?.connectPC() }
         gamepad.onSecondary = { [weak self] in self?.snapMonitorToSurface() }
+        loadVRSettings()
     }
 
     // MARK: - Ciclo de vida
@@ -378,7 +408,6 @@ final class XRSession: NSObject, ObservableObject {
 
         camera.enqueue(frame.capturedImage)
         backdrop.enqueue(frame.capturedImage)
-
         let pose = CameraPose(arkitCamera: frame.camera,
                               orientation: orientation,
                               viewport: rect.size,
@@ -393,6 +422,9 @@ final class XRSession: NSObject, ObservableObject {
 
         overlay.render(poses: lastHands)
         hostView.layout(pose: pose)
+        if stereoEnabled {
+            updateStereoPanes(pose: pose, buffer: frame.capturedImage, cameraSize: rect.size)
+        }
         updateGamepad(pose: pose)
 
         tracker.submit(pixelBuffer: frame.capturedImage,
@@ -470,6 +502,112 @@ final class XRSession: NSObject, ObservableObject {
             + simd_float3(up.x, up.y, up.z) * Float(axes.y * speed * step)
         hostView.setPosition(monitor, monitor.position + delta, force: true)
         gamepadMoving = true
+    }
+
+    // MARK: - Modo VR box (dos mitades)
+
+    private func applyStereoMode() {
+        stereoRoot.isHidden = !stereoEnabled
+        for view in [backdrop, dim, camera, hostView, overlay] as [UIView] {
+            view.isHidden = stereoEnabled
+        }
+
+        if stereoEnabled {
+            buildMirrorWindows()
+        } else {
+            leftPane.host.removeAll()
+            rightPane.host.removeAll()
+        }
+    }
+
+    private func buildMirrorWindows() {
+        leftPane.host.removeAll()
+        rightPane.host.removeAll()
+        for window in hostView.windows {
+            for pane in [leftPane, rightPane] {
+                _ = pane.host.add(kind: window.kind,
+                                  position: window.position,
+                                  physicalWidth: window.physicalWidth)
+            }
+        }
+    }
+
+    private func syncMirrorWindows() {
+        let sources = hostView.windows
+        for pane in [leftPane, rightPane] {
+            guard pane.host.windows.count == sources.count else {
+                buildMirrorWindows()
+                return
+            }
+            for (source, mirror) in zip(sources, pane.host.windows) {
+                mirror.position = source.position
+                mirror.physicalWidth = source.physicalWidth
+                mirror.pinned = source.pinned
+                mirror.view.isHidden = source.view.isHidden
+            }
+        }
+    }
+
+    /// Dibuja la escena en las dos mitades. `cameraSize` es el rectángulo que
+    /// ocupa la cámara, así el zoom elegido se respeta en el visor.
+    private func updateStereoPanes(pose: CameraPose, buffer: CVPixelBuffer, cameraSize: CGSize) {
+        let size = containerView.bounds.size
+        guard size.width > 10, size.height > 10 else { return }
+
+        let half = CGSize(width: size.width / 2, height: size.height)
+        leftPane.frame = CGRect(origin: .zero, size: half)
+        rightPane.frame = CGRect(x: half.width, y: 0, width: half.width, height: half.height)
+
+        leftPane.layoutScene(containerSize: cameraSize, scale: vrScale,
+                             eyeShift: -vrSeparation / 2, verticalOffset: vrVertical)
+        rightPane.layoutScene(containerSize: cameraSize, scale: vrScale,
+                              eyeShift: vrSeparation / 2, verticalOffset: vrVertical)
+
+        leftPane.background.enqueue(buffer)
+        rightPane.background.enqueue(buffer)
+
+        syncMirrorWindows()
+        leftPane.host.layout(pose: pose)
+        rightPane.host.layout(pose: pose)
+        leftPane.render(poses: lastHands)
+        rightPane.render(poses: lastHands)
+    }
+
+    // MARK: - Ajustes VR
+
+    private func saveVRSettings() {
+        let defaults = UserDefaults.standard
+        defaults.set(Double(vrScale), forKey: "dreamspace.vrScale")
+        defaults.set(Double(vrSeparation), forKey: "dreamspace.vrSeparation")
+        defaults.set(Double(vrVertical), forKey: "dreamspace.vrVertical")
+        defaults.set(stereoEnabled, forKey: "dreamspace.stereo")
+    }
+
+    private func loadVRSettings() {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "dreamspace.vrScale") != nil {
+            vrScale = CGFloat(defaults.double(forKey: "dreamspace.vrScale"))
+        }
+        if defaults.object(forKey: "dreamspace.vrSeparation") != nil {
+            vrSeparation = CGFloat(defaults.double(forKey: "dreamspace.vrSeparation"))
+        }
+        if defaults.object(forKey: "dreamspace.vrVertical") != nil {
+            vrVertical = CGFloat(defaults.double(forKey: "dreamspace.vrVertical"))
+        }
+        if defaults.object(forKey: "dreamspace.stereo") != nil {
+            stereoEnabled = defaults.bool(forKey: "dreamspace.stereo")
+        }
+    }
+
+    /// Pasa de la pantalla de ajuste a la cámara.
+    func startCamera() {
+        showsSetup = false
+        start()
+    }
+
+    /// Vuelve al ajuste de los marcos.
+    func openSetup() {
+        showsSetup = true
     }
 
     // MARK: - Utilidades
