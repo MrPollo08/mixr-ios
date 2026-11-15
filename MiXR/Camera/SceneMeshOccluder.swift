@@ -1,4 +1,5 @@
 import ARKit
+import QuartzCore
 import SceneKit
 import UIKit
 import simd
@@ -108,7 +109,8 @@ final class SceneMeshOccluder {
 
         // Índices (uint16 o uint32 según el caso).
         var indices = [Int32](repeating: 0, count: indexCount)
-        let indexBase = mesh.faces.buffer.contents().advanced(by: mesh.faces.offset)
+        // El buffer de caras ya empieza en el primer índice: no tiene offset.
+        let indexBase = mesh.faces.buffer.contents()
         if mesh.faces.bytesPerIndex == 4 {
             let pointer = indexBase.assumingMemoryBound(to: UInt32.self)
             for i in 0..<indexCount { indices[i] = Int32(pointer[i]) }
