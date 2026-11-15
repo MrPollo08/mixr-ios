@@ -420,12 +420,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             let right = simd_float3(rightColumn.x, rightColumn.y, rightColumn.z)
 
             hostView.worldToScreen = { [weak self] world in
-                guard let self else { return nil }
+                guard let self else { return WindowHostView.WorldProjection(center: .zero, pointsPerMeter: 0) }
                 let scene = self.sceneView
                 let point = scene.projectPoint(SCNVector3(x: CGFloat(world.x),
                                                           y: CGFloat(world.y),
                                                           z: CGFloat(world.z)))
-                guard point.x.isFinite, point.y.isFinite else { return nil }
+                guard point.x.isFinite, point.y.isFinite else {
+                    return WindowHostView.WorldProjection(center: .zero, pointsPerMeter: 0)
+                }
 
                 let meter = world + right
                 let offset = scene.projectPoint(SCNVector3(x: CGFloat(meter.x),
@@ -433,10 +435,13 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                                                            z: CGFloat(meter.z)))
                 let pointsPerMeter = hypot(CGFloat(offset.x - point.x),
                                            CGFloat(offset.y - point.y))
-                guard pointsPerMeter.isFinite, pointsPerMeter > 0.1 else { return nil }
+                guard pointsPerMeter.isFinite, pointsPerMeter > 0.1 else {
+                    return WindowHostView.WorldProjection(center: .zero, pointsPerMeter: 0)
+                }
 
-                return WorldProjection(center: CGPoint(x: CGFloat(point.x), y: CGFloat(point.y)),
-                                       pointsPerMeter: pointsPerMeter)
+                return WindowHostView.WorldProjection(center: CGPoint(x: CGFloat(point.x),
+                                                                      y: CGFloat(point.y)),
+                                                      pointsPerMeter: pointsPerMeter)
             }
         } else {
             hostView.worldToScreen = nil

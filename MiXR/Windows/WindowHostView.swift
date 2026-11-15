@@ -21,7 +21,7 @@ final class WindowHostView: UIView {
         let pointsPerMeter: CGFloat
     }
 
-    var worldToScreen: ((simd_float3) -> WorldProjection?)?
+    var worldToScreen: ((simd_float3) -> WorldProjection)?
 
     private var pinchStartWidth: CGFloat = 0
 
@@ -206,12 +206,13 @@ final class WindowHostView: UIView {
         // Preferimos la proyección del renderer del fondo (SceneKit).
         var center = projection.center
         var pointsPerMeter = projection.pointsPerMeter
-        if let projector = worldToScreen,
-           let rendered = projector(window.position),
-           rendered.pointsPerMeter.isFinite, rendered.pointsPerMeter > 0.1,
-           rendered.center.x.isFinite, rendered.center.y.isFinite {
-            center = rendered.center
-            pointsPerMeter = rendered.pointsPerMeter
+        if let projector = worldToScreen {
+            let rendered = projector(window.position)
+            if rendered.pointsPerMeter.isFinite, rendered.pointsPerMeter > 0.1,
+               rendered.center.x.isFinite, rendered.center.y.isFinite {
+                center = rendered.center
+                pointsPerMeter = rendered.pointsPerMeter
+            }
         }
 
         window.pointsPerMeter = pointsPerMeter
