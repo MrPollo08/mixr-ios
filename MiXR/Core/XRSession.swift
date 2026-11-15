@@ -411,6 +411,15 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         }
     }
 
+    /// Enciende o apaga el ambiente 360 (video de tormenta).
+    func toggleEnvironment() {
+        if let sky = sceneView.scene.rootNode.childNode(withName: "skyboxVideo", recursively: false) {
+            sky.removeFromParentNode()
+        } else if let url = Bundle.main.url(forResource: "stormy-ocean", withExtension: "mp4") {
+            sceneView.scene.rootNode.addChildNode(SkyboxVideoNode(url: url))
+        }
+    }
+
     /// Palma abierta: abre el menú si está cerrado, lo cierra si está abierto.
     func toggleMenuWithPalm() {
         if let menu = menuWindow, hostViewsContains(menu) {
@@ -500,6 +509,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         case .hands: toggleHands()
         case .occlusion: toggleOcclusion()
         case .stereo: stereoEnabled.toggle()
+        case .dreamspace: toggleEnvironment()
         case .recenter: recenterView()
         case .clear: closeAllWindows()
         }

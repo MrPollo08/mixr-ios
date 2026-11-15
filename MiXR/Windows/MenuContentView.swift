@@ -11,6 +11,7 @@ enum MenuAction: CaseIterable {
     case hands
     case occlusion
     case stereo
+    case dreamspace
     case recenter
     case clear
 
@@ -25,6 +26,7 @@ enum MenuAction: CaseIterable {
         case .hands: return "Manos"
         case .occlusion: return "Oclusión"
         case .stereo: return "VR"
+        case .dreamspace: return "Dreamspace"
         case .recenter: return "Centrar"
         case .clear: return "Limpiar"
         }
@@ -41,6 +43,7 @@ enum MenuAction: CaseIterable {
         case .hands: return "hand.raised.fill"
         case .occlusion: return "circle.dashed"
         case .stereo: return "rectangle.split.2x1"
+        case .dreamspace: return "water.waves"
         case .recenter: return "scope"
         case .clear: return "trash"
         }
