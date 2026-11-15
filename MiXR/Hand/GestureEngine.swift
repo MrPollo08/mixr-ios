@@ -29,6 +29,8 @@ final class GestureEngine {
     /// Distancia al agarrar: la ventana (la del mundo) y la mano (la del LiDAR).
     private var appliedDistance: CGFloat = 0
     private var startHandDepth: Float = 0
+    /// Pose de la cámara al agarrar (para el arrastre con 6DoF).
+    private var startPose: CameraPose?
     /// Última distancia LiDAR a la mano (la escribe `update`).
     private var latestHandDepth: Float?
     private var applied: CGSize = .zero
@@ -155,7 +157,7 @@ final class GestureEngine {
                 let point = dragPoint(first)
                 if let byBar = host.window(atBar: point) {
                     begin(window: byBar, with: first, host: host)
-                } else if let target = host.window(at: point) {
+                } else if let target = host.window(at: point) ?? host.window(near: point, margin: 22) {
                     begin(window: target, with: first, host: host)
                 }
             }
@@ -220,19 +222,7 @@ final class GestureEngine {
         lastPoint = rawPoint
 
         let total = CGSize(width: point.x - startPoint.x, height: point.y - startPoint.y)
-
-        // ppm actual: mantiene el 1:1 en pantalla aunque la ventana cambie de
-        // profundidad a mitad del recorrido.
-        let pointsPerMeter = window.pointsPerMeter > 1 ? window.pointsPerMeter : startPointsPerMeter
-        guard pointsPerMeter > 1 else { return }
-
-        let transform = pose.transform
-        let right = simd_float3(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
-        let up = simd_float3(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
-
-        // Desplazamiento lateral en metros (respecto del punto de agarre).
-        let lateral = right * Float(total.width / pointsPerMeter)
-            + up * Float(-total.height / pointsPerMeter)
+        applied = total
 
         // ---- Profundidad (LiDAR): alejar / traer la ventana ----
         // La ventana se mueve en el eje de visión lo mismo que se mueve la mano
@@ -256,13 +246,37 @@ final class GestureEngine {
                 appliedDistance += (target - appliedDistance) * 0.12
             }
         }
-        applied = total
+
+        // ---- Lateral con 6DoF ----
+        // La dirección del dedo se lleva al mundo con la pose de la cámara al
+        // agarrar: si girás la cabeza mientras arrastrás, la ventana NO se corre
+        // sola (el mundo no se mueve: la mano sí).
+        let startOffset = rayOffset(startPoint, pose: startPose ?? pose)
+        let nowOffset = rayOffset(point, pose: pose)
+        let lateral = (nowOffset - startOffset) * Float(appliedDistance)
 
         let position = startCamera
             + startForward * Float(appliedDistance)
             + startLateral
             + lateral
         host.setPosition(window, position)
+    }
+
+    /// Dirección del rayo de cámara para un punto de pantalla, en coordenadas de
+    /// mundo y **sin normalizar** (así el desplazamiento es lineal con los pt).
+    private func rayOffset(_ point: CGPoint, pose: CameraPose) -> simd_float3 {
+        let width = max(pose.viewport.width, 1)
+        let height = max(pose.viewport.height, 1)
+        let focalX = max(pose.focalX, 1)
+        let focalY = max(pose.focalY, 1)
+
+        let x = Float((point.x - width / 2) / focalX)
+        let y = Float(-(point.y - height / 2) / focalY)
+
+        let right = pose.transform.columns.0
+        let up = pose.transform.columns.1
+        return simd_float3(right.x, right.y, right.z) * x
+            + simd_float3(up.x, up.y, up.z) * y
     }
 
     // MARK: - Agarre
@@ -302,6 +316,7 @@ final class GestureEngine {
             appliedDistance = 1
         }
         startHandDepth = latestHandDepth ?? 0
+        startPose = host.lastPose
         depthRatio = 1
         twoHandResize = false
         lastSeenAt = CACurrentMediaTime()

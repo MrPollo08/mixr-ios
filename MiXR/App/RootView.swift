@@ -86,7 +86,7 @@ struct RootView: View {
         if session.controlMode {
             return "El índice mueve el cursor del PC · pinza = clic · apuntá al menú para salir"
         }
-        return "Pinza un tile · doble pinza al aire = menú · borde = estirar"
+        return "Puño en la barra del costado = mover · empujá la mano = alejar · palma = menú"
     }
 
     private func unsupported(_ message: String) -> some View {

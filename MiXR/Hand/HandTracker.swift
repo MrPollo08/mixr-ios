@@ -39,6 +39,12 @@ final class HandTracker {
     private let queue = DispatchQueue(label: "mixr.hand-tracker")
     private let request = VNDetectHumanHandPoseRequest()
     private let sequence = VNSequenceRequestHandler()
+
+    /// Zona de detección restringida (fracciones de la pantalla): sólo la parte
+    /// **alta y central**, donde está la mano cuando la levantás. Abajo quedan
+    /// piernas, pies y torso: ahí no se busca nada, así no aparecen manos
+    /// fantasma ni gestos falsos.
+    static let detectionBand = CGRect(x: 0.06, y: 0.0, width: 0.88, height: 0.84)
     private var smoothed: [String: [VNHumanHandPoseObservation.JointName: CGPoint]] = [:]
     /// Última pose por mano, para no hacer parpadear el esqueleto si Vision
     /// pierde un frame.
@@ -150,6 +156,17 @@ final class HandTracker {
             let openPalm = Self.allFingersExtended(joints)
             let closedFist = Self.isClosedFist(joints)
             let palmCenter = CGPoint(x: (wrist.x + middle.x) / 2, y: (wrist.y + middle.y) / 2)
+
+            // Zona permitida: si la mano está abajo o pegada a un borde, se
+            // ignora por completo (piernas, pies, torso, rebordes).
+            guard viewportSize.width > 1, viewportSize.height > 1 else { continue }
+            let band = Self.detectionBand
+            let allowed = CGRect(x: viewportSize.width * band.minX,
+                                 y: viewportSize.height * band.minY,
+                                 width: viewportSize.width * band.width,
+                                 height: viewportSize.height * band.height)
+            guard allowed.contains(palmCenter) else { continue }
+
             poses.append(HandPose(key: key, joints: joints, pinchPoint: pinchPoint,
                                   pinch: pinch, openPalm: openPalm,
                                   closedFist: closedFist, palmCenter: palmCenter,
@@ -244,7 +261,9 @@ final class HandTracker {
         }
 
         let speed = hypot(value.x - previous.x, value.y - previous.y)
-        let alpha = min(0.92, max(0.22, 0.22 + speed * 0.07))
+        // Precisión: quieto filtra fuerte (sin temblor) y en movimiento casi no
+        // filtra (sin retraso), así el esqueleto va pegado a los nudillos.
+        let alpha = min(0.95, max(0.34, 0.34 + speed * 0.11))
 
         let result = CGPoint(x: previous.x + (value.x - previous.x) * alpha,
                              y: previous.y + (value.y - previous.y) * alpha)

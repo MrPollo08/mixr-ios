@@ -22,6 +22,10 @@ struct CameraPose {
     let arkitCamera: ARCamera?
     let orientation: UIInterfaceOrientation
 
+    /// ARKit viene con tracking limitado (poca luz/textura): las ventanas se
+    /// mueven más despacio para que no tiemblen.
+    var trackingLimited = false
+
     struct Projection {
         let center: CGPoint
         let pointsPerMeter: CGFloat
@@ -65,9 +69,11 @@ struct CameraPose {
         matrix.columns.3 = simd_float4(matrix.columns.3.x + shift.x,
                                        matrix.columns.3.y + shift.y,
                                        matrix.columns.3.z + shift.z, 1)
-        return CameraPose(transform: matrix, focalX: focalX, focalY: focalY,
-                          viewport: viewport, imageAspect: imageAspect,
-                          arkitCamera: arkitCamera, orientation: orientation)
+        var result = CameraPose(transform: matrix, focalX: focalX, focalY: focalY,
+                                viewport: viewport, imageAspect: imageAspect,
+                                arkitCamera: arkitCamera, orientation: orientation)
+        result.trackingLimited = trackingLimited
+        return result
     }
 
     private init(transform: simd_float4x4, focalX: CGFloat, focalY: CGFloat,

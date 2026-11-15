@@ -239,8 +239,10 @@ final class WindowHostView: UIView {
         window.view.isHidden = false
         window.view.bounds = CGRect(origin: .zero, size: window.view.baseSize)
         let previous = window.smoothedCenter ?? center
-        let smoothed = CGPoint(x: previous.x + (center.x - previous.x) * 0.35,
-                               y: previous.y + (center.y - previous.y) * 0.35)
+        // Tracking limitado (poca luz/textura): más calma, menos temblor.
+        let smoothing: CGFloat = pose.trackingLimited ? 0.14 : 0.35
+        let smoothed = CGPoint(x: previous.x + (center.x - previous.x) * smoothing,
+                               y: previous.y + (center.y - previous.y) * smoothing)
         window.smoothedCenter = smoothed
         window.view.center = smoothed
 

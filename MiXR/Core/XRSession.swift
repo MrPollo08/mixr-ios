@@ -274,7 +274,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         case .arkit:
             let configuration = ARWorldTrackingConfiguration()
             configuration.worldAlignment = .gravity
-            configuration.planeDetection = [.horizontal]
+            configuration.planeDetection = [.horizontal, .vertical]
 
             // LiDAR: malla del entorno. Sin esto, en paredes lisas ARKit queda
             // en 'limited' y pierde la traslación (la ventana te sigue en Z).
@@ -287,6 +287,11 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             // LiDAR: profundidad real de la mano (sólo en modelos Pro).
             if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
                 configuration.frameSemantics.insert(.sceneDepth)
+            }
+            // Profundidad suavizada por ARKit: mucho menos temblor en el dedo
+            // y en el empuje de las ventanas.
+            if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+                configuration.frameSemantics.insert(.smoothedSceneDepth)
             }
 
             if Self.useRealityKit {
@@ -590,8 +595,8 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
                 // LiDAR: distancia real a la palma. Con esto se empujan y se
                 // traen las ventanas (profundidad de verdad, no una estimación).
-                if let pose, let depthMap = frame.sceneDepth?.depthMap,
-                   let palm = lastHands.first?.palmCenter,
+                let depthMap = frame.smoothedSceneDepth?.depthMap ?? frame.sceneDepth?.depthMap
+                if let pose, let depthMap, let palm = lastHands.first?.palmCenter,
                    let depth = HandDepthSampler.depth(at: palm,
                                                       depthMap: depthMap,
                                                       imageAspect: pose.imageAspect,
@@ -600,6 +605,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                     handDepth = depth
                 } else {
                     handDepth = nil
+                }
+
+                // 6DoF: si el tracking está limitado, las ventanas se mueven con
+                // más calma (que queden "duras" y no temblando).
+                if case .normal = frame.camera.trackingState {
+                    // todo bien
+                } else {
+                    pose?.trackingLimited = true
                 }
             }
 

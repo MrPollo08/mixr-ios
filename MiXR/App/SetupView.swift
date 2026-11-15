@@ -35,7 +35,7 @@ struct SetupView: View {
 
     private var header: some View {
         VStack(spacing: 2) {
-            Text("MiXR")
+            Text("Dreamspace")
                 .font(.system(size: 24, weight: .heavy))
                 .foregroundColor(.white)
             Text("Ajustá el marco de las gafas y encendé la cámara")

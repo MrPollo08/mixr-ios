@@ -13,6 +13,14 @@ final class HandOverlayView: UIView {
     private let pointerLayer = CAShapeLayer()
     /// Punto que marca la mano cuando agarra (va por encima de la ventana).
     private let grabDotLayer = CAShapeLayer()
+    /// Esqueleto: líneas entre articulaciones y un punto en cada una.
+    private let boneLayer = CAShapeLayer()
+    private let jointLayer = CAShapeLayer()
+
+    /// Largo del rayito (pt). Bien largo, como un puntero de verdad.
+    static let rayLength: CGFloat = 190
+    /// El esqueleto se puede apagar desde el tile "Manos".
+    var showsSkeleton = true
     /// El puntero (rayito) sólo se dibuja cuando se apunta a algo.
     private var pointerVisible = false
 
@@ -37,7 +45,17 @@ final class HandOverlayView: UIView {
         grabDotLayer.strokeColor = UIColor(red: 0.42, green: 0.86, blue: 1.0, alpha: 0.95).cgColor
         grabDotLayer.lineWidth = 3
 
-        for shape in [palmButtonLayer, dotLayer, pointerLayer, grabDotLayer] {
+        boneLayer.fillColor = UIColor.clear.cgColor
+        boneLayer.strokeColor = UIColor.white.withAlphaComponent(0.78).cgColor
+        boneLayer.lineWidth = 2.5
+        boneLayer.lineCap = .round
+        boneLayer.lineJoin = .round
+
+        jointLayer.fillColor = UIColor.white.withAlphaComponent(0.95).cgColor
+        jointLayer.strokeColor = UIColor.black.withAlphaComponent(0.35).cgColor
+        jointLayer.lineWidth = 1
+
+        for shape in [palmButtonLayer, dotLayer, pointerLayer, grabDotLayer, boneLayer, jointLayer] {
             layer.addSublayer(shape)
         }
     }
@@ -48,7 +66,7 @@ final class HandOverlayView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        for shape in [palmButtonLayer, dotLayer, pointerLayer, grabDotLayer] {
+        for shape in [palmButtonLayer, dotLayer, pointerLayer, grabDotLayer, boneLayer, jointLayer] {
             shape.frame = bounds
         }
     }
@@ -57,24 +75,63 @@ final class HandOverlayView: UIView {
     func setPointer(_ point: CGPoint?) {
         pointerVisible = (point != nil)
     }
+    /// Dibuja el esqueleto de cada mano: una línea por hueso y un punto en cada
+    /// articulación (Vision entrega 21 por mano).
+    private func drawSkeleton(_ poses: [HandPose]) {
+        guard showsSkeleton else {
+            boneLayer.path = nil
+            jointLayer.path = nil
+            return
+        }
+
+        let bones = UIBezierPath()
+        let joints = UIBezierPath()
+
+        for pose in poses {
+            for chain in HandTracker.connections {
+                var previous: CGPoint?
+                for name in chain {
+                    guard let point = pose.joints[name] else { previous = nil; continue }
+                    if let previous {
+                        bones.move(to: previous)
+                        bones.addLine(to: point)
+                    }
+                    previous = point
+                }
+            }
+            for (_, point) in pose.joints {
+                joints.append(UIBezierPath(ovalIn: CGRect(x: point.x - 3,
+                                                          y: point.y - 3,
+                                                          width: 6, height: 6)))
+            }
+        }
+
+        boneLayer.path = bones.cgPath
+        jointLayer.path = joints.cgPath
+    }
+
     func render(poses: [HandPose]) {
-        // Sin gráficos sobre la mano: sólo el ☰ de la palma.
         dotLayer.path = nil
 
-        // Rayito desde el dedo con un punto en la punta (para elegir apps).
+        // Esqueleto de precisión: líneas y puntos exactamente en las
+        // articulaciones que entrega Vision (nudillos y yemas).
+        drawSkeleton(poses)
+
+        // Rayito largo desde el dedo con un punto en la punta.
         if pointerVisible, let pose = poses.first,
            let tip = pose.joints[.indexTip] {
             let base = pose.joints[.indexMCP] ?? pose.joints[.wrist] ?? tip
             let dx = tip.x - base.x
             let dy = tip.y - base.y
             let length = max(hypot(dx, dy), 1)
-            let end = CGPoint(x: tip.x + dx / length * 46, y: tip.y + dy / length * 46)
+            let end = CGPoint(x: tip.x + dx / length * Self.rayLength,
+                              y: tip.y + dy / length * Self.rayLength)
 
             let ray = UIBezierPath()
             ray.move(to: base)
             ray.addLine(to: end)
-            ray.append(UIBezierPath(ovalIn: CGRect(x: end.x - 5, y: end.y - 5,
-                                                    width: 10, height: 10)))
+            ray.append(UIBezierPath(ovalIn: CGRect(x: end.x - 6, y: end.y - 6,
+                                                    width: 12, height: 12)))
             pointerLayer.path = ray.cgPath
             pointerLayer.fillColor = UIColor.white.cgColor
             pointerLayer.lineWidth = 2
