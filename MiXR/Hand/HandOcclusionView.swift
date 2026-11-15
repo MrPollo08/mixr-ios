@@ -20,6 +20,12 @@ final class HandOcclusionView: UIView {
     private var orientation: UIInterfaceOrientation = .landscapeRight
     private var busy = false
 
+    /// Segmentación de persona de Vision: la máscara "de verdad" de la mano y
+    /// el brazo. Se combina con la silueta geométrica (que nunca falla).
+    private let segmentation = VNGeneratePersonSegmentationRequest()
+    private var personMask: CVPixelBuffer?
+    private var lastSegmentationAt: CFTimeInterval = 0
+
     /// La máscara se dibuja a media resolución (más rápido) y después se
     /// reescala para que coincida con la imagen de la cámara.
     private static let maskScale: CGFloat = 0.5
@@ -61,7 +67,40 @@ final class HandOcclusionView: UIView {
         self.buffer = buffer
         self.hands = hands
         self.orientation = orientation
+
+        if let buffer {
+            requestSegmentationIfNeeded(buffer)
+        }
         schedule()
+    }
+
+    /// Pide la máscara de persona cada ~150 ms (es lo más caro).
+    private func requestSegmentationIfNeeded(_ buffer: CVPixelBuffer) {
+        let now = CACurrentMediaTime()
+        guard now - lastSegmentationAt > 0.15 else { return }
+        lastSegmentationAt = now
+
+        let orientation = self.orientation
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.segmentation.qualityLevel = .balanced
+            self.segmentation.outputPixelFormat = kCVPixelFormatType_OneComponent8
+
+            let handler = VNImageRequestHandler(
+                cvPixelBuffer: buffer,
+                orientation: ScreenOrientation.visionOrientation(for: orientation),
+                options: [:]
+            )
+            do {
+                try handler.perform([self.segmentation])
+                if let result = self.segmentation.results?.first,
+                   let mask = try? result.pixelBuffer {
+                    self.personMask = mask
+                }
+            } catch {
+                self.personMask = nil
+            }
+        }
     }
 
     func clear() {
@@ -138,9 +177,31 @@ final class HandOcclusionView: UIView {
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 4])
             .cropped(to: rect)
 
+        // Unión con la máscara real de persona (mano + brazo), si la hay.
+        var finalMask = maskImage
+        if let personMask {
+            var person = CIImage(cvPixelBuffer: personMask)
+                .oriented(forExifOrientation: exif)
+            person = person.transformed(by: CGAffineTransform(translationX: -person.extent.origin.x,
+                                                              y: -person.extent.origin.y))
+            let maskWidth = person.extent.width
+            let maskHeight = person.extent.height
+            if maskWidth > 1, maskHeight > 1 {
+                let maskFill = max(size.width / maskWidth, size.height / maskHeight)
+                let personFramed = person
+                    .transformed(by: CGAffineTransform(scaleX: maskFill, y: maskFill))
+                    .transformed(by: CGAffineTransform(translationX: (size.width - maskWidth * maskFill) / 2,
+                                                       y: (size.height - maskHeight * maskFill) / 2))
+                    .cropped(to: rect)
+                finalMask = personFramed.applyingFilter("CIMaximumComposition", parameters: [
+                    kCIInputBackgroundImageKey: maskImage
+                ])
+            }
+        }
+
         let clear = CIImage(color: CIColor.clear).cropped(to: rect)
         let blended = framed.applyingFilter("CIBlendWithMask", parameters: [
-            kCIInputMaskImageKey: maskImage,
+            kCIInputMaskImageKey: finalMask,
             kCIInputBackgroundImageKey: clear
         ])
 

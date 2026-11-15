@@ -21,6 +21,8 @@ final class GestureEngine {
     private var startPointsPerMeter: CGFloat = 0
     private var startHandSize: CGFloat = 0
     private var depthRatio: Float = 1
+    private var applied: CGSize = .zero
+    private var lastPoint: CGPoint?
     private var lastSeenAt: CFTimeInterval = 0
 
     private var twoHandResize = false
@@ -29,7 +31,7 @@ final class GestureEngine {
 
     private var latch: [String: Bool] = [:]
     private var lastHoverAt: CFTimeInterval = 0
-    private let grace: TimeInterval = 0.30
+    private let grace: TimeInterval = 0.45
 
     var isDragging: Bool { grabbed != nil }
 
@@ -138,12 +140,27 @@ final class GestureEngine {
 
     private func translate(_ window: SpatialWindow,
                            with hand: HandPose,
-                           to point: CGPoint,
+                           to rawPoint: CGPoint,
                            pose: CameraPose,
                            host: WindowHostView) {
+
+        // Predicción: las articulaciones vienen suavizadas, así que la ventana
+        // llegaba tarde y se despegaba del recorrido del dedo.
+        var point = rawPoint
+        if let previous = lastPoint {
+            let dx = rawPoint.x - previous.x
+            let dy = rawPoint.y - previous.y
+            if hypot(dx, dy) < 60 {
+                point = CGPoint(x: rawPoint.x + dx * 0.55, y: rawPoint.y + dy * 0.55)
+            }
+        }
+        lastPoint = rawPoint
+
         let total = CGSize(width: point.x - startPoint.x, height: point.y - startPoint.y)
 
-        let pointsPerMeter = startPointsPerMeter > 1 ? startPointsPerMeter : window.pointsPerMeter
+        // ppm actual: mantiene el 1:1 en pantalla aunque la ventana cambie de
+        // profundidad a mitad del recorrido.
+        let pointsPerMeter = window.pointsPerMeter > 1 ? window.pointsPerMeter : startPointsPerMeter
         guard pointsPerMeter > 1 else { return }
 
         let transform = pose.transform
@@ -154,15 +171,18 @@ final class GestureEngine {
         let lateral = right * Float(total.width / pointsPerMeter)
             + up * Float(-total.height / pointsPerMeter)
 
-        // Profundidad: si la mano se agranda (se acerca), la ventana se acerca.
+        // Profundidad: sólo si la mano está casi quieta en el plano. Si está
+        // recorriendo, no se toca: así sigue el recorrido sin desviarse.
+        let moved = hypot(total.width - applied.width, total.height - applied.height)
         let size = handSize(of: hand)
-        if startHandSize > 4, size > 4 {
+        if moved < 2.0, startHandSize > 4, size > 4 {
             let raw = Float(startHandSize / size)
-            let clamped = min(max(raw, 0.55), 1.85)
-            if abs(clamped - 1) > 0.03 || abs(depthRatio - 1) > 0.03 {
-                depthRatio += (clamped - depthRatio) * 0.2
+            let clamped = min(max(raw, 0.6), 1.7)
+            if abs(clamped - 1) > 0.05 || abs(depthRatio - 1) > 0.05 {
+                depthRatio += (clamped - depthRatio) * 0.12
             }
         }
+        applied = total
 
         let base = startPosition + lateral
         let position = startCamera + (base - startCamera) * depthRatio
@@ -183,6 +203,7 @@ final class GestureEngine {
         grabbed = window
         dragKey = hand.key
         startPoint = point
+        lastPoint = point
         startPosition = window.position
         if let cameraPose = host.lastPose {
             let column = cameraPose.transform.columns.3
