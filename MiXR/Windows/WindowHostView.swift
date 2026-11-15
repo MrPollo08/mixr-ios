@@ -105,6 +105,13 @@ final class WindowHostView: UIView {
             self.handlePinch(gesture, window: window)
         }
 
+        // El panel queda mirando hacia donde estaba la cámara al crearlo.
+        if let pose = lastPose {
+            window.normal = simd_float3(pose.transform.columns.2.x,
+                                        pose.transform.columns.2.y,
+                                        pose.transform.columns.2.z)
+        }
+
         addSubview(view)
         windows.append(window)
         layoutWindow(window)
@@ -199,7 +206,8 @@ final class WindowHostView: UIView {
 
             let targetWidth = window.physicalWidth * pointsPerMeter
             let scale = targetWidth / window.view.baseSize.width
-            window.view.transform = CGAffineTransform(scaleX: scale, y: scale)
+        window.view.transform = .identity
+        window.view.layer.transform = panelTransform(window: window, pose: pose, scale: scale)
             window.view.alpha = 1
             return
         }
@@ -228,13 +236,52 @@ final class WindowHostView: UIView {
 
         let targetWidth = window.physicalWidth * pointsPerMeter
         let scale = targetWidth / window.view.baseSize.width
-        window.view.transform = CGAffineTransform(scaleX: scale, y: scale)
+        window.view.transform = .identity
+        window.view.layer.transform = panelTransform(window: window, pose: pose, scale: scale)
 
         // Se atenúa un poco con la distancia (efecto de profundidad).
         let fade = CGFloat(1.35 - projection.depth * 0.09)
         window.view.alpha = min(1, max(0.35, fade))
     }
 
+
+    /// Transformación 3D real del panel: se inclina según desde dónde lo mires.
+    /// Sin esto las ventanas eran "billboard" (siempre de frente).
+    private func panelTransform(window: SpatialWindow, pose: CameraPose, scale: CGFloat) -> CATransform3D {
+        let cameraPosition = simd_float3(pose.transform.columns.3.x,
+                                         pose.transform.columns.3.y,
+                                         pose.transform.columns.3.z)
+        let delta = cameraPosition - window.position
+        let normal = window.normal
+
+        var right = simd_cross(simd_float3(0, 1, 0), normal)
+        if simd_length(right) < 0.01 { right = simd_float3(1, 0, 0) }
+        right = simd_normalize(right)
+        let up = simd_normalize(simd_cross(normal, right))
+
+        let localX = simd_dot(delta, right)
+        let localY = simd_dot(delta, up)
+        let localZ = max(simd_dot(delta, normal), 0.01)
+
+        let yaw = atan2(CGFloat(localX), CGFloat(localZ))
+        let pitch = atan2(CGFloat(localY), CGFloat(hypot(localX, localZ)))
+
+        var transform = CATransform3DIdentity
+        transform.m34 = -1.0 / 1400.0
+        transform = CATransform3DRotate(transform, -yaw, 0, 1, 0)
+        transform = CATransform3DRotate(transform, pitch, 1, 0, 0)
+        transform = CATransform3DScale(transform, scale, scale, 1)
+        return transform
+    }
+
+    /// Verdadero si el panel está de espaldas a la cámara (hay que ocultarlo).
+    private func isFacingAway(window: SpatialWindow, pose: CameraPose) -> Bool {
+        let cameraPosition = simd_float3(pose.transform.columns.3.x,
+                                         pose.transform.columns.3.y,
+                                         pose.transform.columns.3.z)
+        let toCamera = simd_normalize(cameraPosition - window.position)
+        return simd_dot(window.normal, toCamera) < 0.12
+    }
     // MARK: - Interacción con el dedo (respaldo del tracking de manos)
 
     private func handlePan(_ gesture: UIPanGestureRecognizer, window: SpatialWindow) {

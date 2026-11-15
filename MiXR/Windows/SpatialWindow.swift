@@ -99,6 +99,9 @@ final class SpatialWindow {
     var pinned = false
     var pinnedDistance: Float = 1.1
 
+    /// Dirección (mundo) a la que mira el panel. Se fija al crearlo.
+    var normal = simd_float3(0, 0, 1)
+
     /// Si la ventana es un menú: apretar un botón (en coordenadas del host).
     var pressAt: ((CGPoint) -> Bool)?
     /// El dedo se movió sobre el menú (nil = no hay dedo cerca). dt en segundos.
