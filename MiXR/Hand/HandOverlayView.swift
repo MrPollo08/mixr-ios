@@ -59,13 +59,8 @@ final class HandOverlayView: UIView {
     }
 
     func render(poses: [HandPose]) {
-        // Punto en la yema del índice: todo el feedback que hace falta.
-        if let tip = poses.first?.joints[.indexTip] {
-            dotLayer.path = UIBezierPath(ovalIn: CGRect(x: tip.x - 4.5, y: tip.y - 4.5,
-                                                        width: 9, height: 9)).cgPath
-        } else {
-            dotLayer.path = nil
-        }
+        // Sin gráficos sobre la mano: sólo el ☰ de la palma.
+        dotLayer.path = nil
 
         // ☰ en la palma, sólo con la mano abierta.
         if let open = poses.first(where: { $0.openPalm }),

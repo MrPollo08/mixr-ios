@@ -67,7 +67,8 @@ final class GestureEngine {
             activeKeys.insert(hand.key)
             let wasPinching = latch[hand.key] ?? false
             let threshold: CGFloat = wasPinching ? 0.55 : 0.78
-            let isPinching = hand.pinch > threshold
+            // Agarrede directo: se agarra cerrando el puño, no con pinza.
+            let isPinching = hand.closedFist
             latch[hand.key] = isPinching
             if isPinching { pinching.append(hand) }
 
@@ -227,10 +228,7 @@ final class GestureEngine {
 
         // El menú no se puede cerrar, pero sí mover: si la pinza cae en un tile,
         // se aprieta; si cae en el panel, se arrastra como cualquier ventana.
-        // Pinza sobre un botón (menú/teclado) = clic del mouse virtual.
-        if let press = window.pressAt, press(point) {
-            return
-        }
+        // Los botones se activan con el cursor (dwell), no con el agarre.
 
         grabbed = window
         dragKey = hand.key
@@ -282,7 +280,7 @@ final class GestureEngine {
 
     /// Punto de control: la yema del índice (estable) y si no, la pinza.
     private func dragPoint(_ hand: HandPose) -> CGPoint {
-        hand.joints[.indexTip] ?? hand.pinchPoint
+        hand.palmCenter
     }
 
     /// Tamaño aparente de la mano en pantalla (crece cuando se acerca).

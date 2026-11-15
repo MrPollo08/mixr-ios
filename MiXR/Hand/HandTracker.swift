@@ -15,6 +15,10 @@ struct HandPose {
     let pinch: CGFloat
     /// Palma abierta con (casi) todos los dedos extendidos.
     let openPalm: Bool
+    /// Puño cerrado (agarre directo).
+    let closedFist: Bool
+    /// Centro de la palma en pantalla (punto de agarre).
+    let palmCenter: CGPoint
 }
 
 /// Detección de manos con Vision (21 articulaciones por mano, hasta 2 manos).
@@ -136,8 +140,12 @@ final class HandTracker {
             }
 
             let openPalm = Self.allFingersExtended(joints)
+            let closedFist = Self.isClosedFist(joints)
+            let palmCenter = CGPoint(x: (wrist.x + middle.x) / 2, y: (wrist.y + middle.y) / 2)
             poses.append(HandPose(key: key, joints: joints, pinchPoint: pinchPoint,
                                   pinch: pinch, openPalm: openPalm))
+                                  pinch: pinch, openPalm: openPalm,
+                                  closedFist: closedFist, palmCenter: palmCenter))
         }
 
         let stale = smoothed.keys.filter { !seen.contains($0) }
@@ -163,6 +171,22 @@ final class HandTracker {
         return poses
     }
 
+    /// Puño cerrado: al menos 3 de los 4 dedos recogidos.
+    private static func isClosedFist(_ joints: [VNHumanHandPoseObservation.JointName: CGPoint]) -> Bool {
+        guard let wrist = joints[.wrist] else { return false }
+        let pairs: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
+            (.indexTip, .indexMCP), (.middleTip, .middleMCP),
+            (.ringTip, .ringMCP), (.littleTip, .littleMCP)
+        ]
+        var curled = 0
+        for (tipName, mcpName) in pairs {
+            guard let tip = joints[tipName], let mcp = joints[mcpName] else { continue }
+            let tipDistance = hypot(tip.x - wrist.x, tip.y - wrist.y)
+            let mcpDistance = max(hypot(mcp.x - wrist.x, mcp.y - wrist.y), 1)
+            if tipDistance / mcpDistance < 1.12 { curled += 1 }
+        }
+        return curled >= 3
+    }
     /// Mano abierta: al menos 4 de los 5 dedos extendidos.
     private static func allFingersExtended(_ joints: [VNHumanHandPoseObservation.JointName: CGPoint]) -> Bool {
         guard let wrist = joints[.wrist] else { return false }
