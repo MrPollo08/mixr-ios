@@ -587,6 +587,20 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                                                       recursively: false) != nil {
                     meshOccluder.update(frame: frame)
                 }
+
+                // LiDAR: distancia real a la palma. Con esto se empujan y se
+                // traen las ventanas (profundidad de verdad, no una estimación).
+                if let pose, let depthMap = frame.sceneDepth?.depthMap,
+                   let palm = lastHands.first?.palmCenter,
+                   let depth = HandDepthSampler.depth(at: palm,
+                                                      depthMap: depthMap,
+                                                      imageAspect: pose.imageAspect,
+                                                      viewport: viewport,
+                                                      orientation: orientation) {
+                    handDepth = depth
+                } else {
+                    handDepth = nil
+                }
             }
 
         case .ultraWide:
@@ -760,10 +774,9 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             // La mano es el mouse del PC: no se tocan las ventanas.
             overlay.setPointer(pointer.update(poses: poses, viewport: overlay.bounds.size))
         } else {
-            // Sobre el menú, mostramos una retícula para ver dónde apunta el dedo.
+            // Cerca de una ventana: rayito desde el dedo con punto en la punta.
             if let tip = poses.first.map({ $0.joints[.indexTip] ?? $0.pinchPoint }),
-               let target = hostView.window(at: tip),
-               target.pressAt != nil {
+               hostView.window(near: tip) != nil {
                 overlay.setPointer(tip)
             } else {
                 overlay.setPointer(nil)

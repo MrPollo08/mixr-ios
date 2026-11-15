@@ -11,6 +11,8 @@ final class HandOverlayView: UIView {
     private let dotLayer = CAShapeLayer()
     private let palmButtonLayer = CAShapeLayer()
     private let pointerLayer = CAShapeLayer()
+    /// Punto que marca la mano cuando agarra (va por encima de la ventana).
+    private let grabDotLayer = CAShapeLayer()
     /// El puntero (rayito) sólo se dibuja cuando se apunta a algo.
     private var pointerVisible = false
 
@@ -31,7 +33,11 @@ final class HandOverlayView: UIView {
         pointerLayer.strokeColor = UIColor.white.withAlphaComponent(0.9).cgColor
         pointerLayer.lineWidth = 2
 
-        for shape in [palmButtonLayer, dotLayer, pointerLayer] {
+        grabDotLayer.fillColor = UIColor.white.withAlphaComponent(0.95).cgColor
+        grabDotLayer.strokeColor = UIColor(red: 0.42, green: 0.86, blue: 1.0, alpha: 0.95).cgColor
+        grabDotLayer.lineWidth = 3
+
+        for shape in [palmButtonLayer, dotLayer, pointerLayer, grabDotLayer] {
             layer.addSublayer(shape)
         }
     }
@@ -42,7 +48,7 @@ final class HandOverlayView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        for shape in [palmButtonLayer, dotLayer, pointerLayer] {
+        for shape in [palmButtonLayer, dotLayer, pointerLayer, grabDotLayer] {
             shape.frame = bounds
         }
     }
@@ -75,6 +81,19 @@ final class HandOverlayView: UIView {
             pointerLayer.strokeColor = UIColor.white.withAlphaComponent(0.95).cgColor
         } else {
             pointerLayer.path = nil
+        }
+
+        // Punto en la palma con el puño cerrado: así se ve que la ventana va
+        // con la mano (el overlay está por encima de las ventanas).
+        if let fist = poses.first(where: { $0.closedFist }) {
+            let radius: CGFloat = 8
+            let center = fist.palmCenter
+            grabDotLayer.path = UIBezierPath(ovalIn: CGRect(x: center.x - radius,
+                                                            y: center.y - radius,
+                                                            width: radius * 2,
+                                                            height: radius * 2)).cgPath
+        } else {
+            grabDotLayer.path = nil
         }
 
         // ☰ en la palma, sólo con la mano abierta.

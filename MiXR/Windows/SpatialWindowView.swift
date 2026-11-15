@@ -28,6 +28,12 @@ final class SpatialWindowView: UIView {
     private let closeButton = UIButton(type: .system)
     private let linkButton = UIButton(type: .system)
     private let contentContainer = UIView()
+    /// Barra fina al costado: es el agarre de la ventana (puño cerrado).
+    private let grabBar = UIView()
+
+    /// Rectángulo de la barra, en coordenadas de esta vista (puede salir del
+    /// bounds: la ventana no recorta).
+    var grabBarFrame: CGRect { grabBar.frame }
 
     private(set) var content: UIView?
 
@@ -57,6 +63,14 @@ final class SpatialWindowView: UIView {
         backgroundColor = .clear
         isOpaque = false
         clipsToBounds = false
+
+        // La barra de agarre se agrega primero: queda por debajo del contenido
+        // pero fuera del panel, así nunca tapa nada.
+        grabBar.backgroundColor = UIColor.white.withAlphaComponent(0.30)
+        grabBar.layer.borderColor = UIColor.white.withAlphaComponent(0.45).cgColor
+        grabBar.layer.borderWidth = 1
+        grabBar.isUserInteractionEnabled = false
+        addSubview(grabBar)
 
         if chromeless {
             contentContainer.frame = bounds
@@ -135,7 +149,23 @@ final class SpatialWindowView: UIView {
             ? UIColor(red: 0.42, green: 0.86, blue: 1.0, alpha: 0.95).cgColor
             : UIColor.white.withAlphaComponent(0.16).cgColor
         card.layer.borderWidth = grabbed ? 2.5 : 1
+        if grabbed { setGrabBar(near: true) }
     }
+
+    /// La barra se enciende cuando la mano está cerca o agarrando.
+    func setGrabBar(near: Bool) {
+        guard grabBarNear != near else { return }
+        grabBarNear = near
+        UIView.animate(withDuration: 0.12) {
+            self.grabBar.backgroundColor = UIColor.white.withAlphaComponent(near ? 0.95 : 0.30)
+            self.grabBar.layer.borderColor = UIColor.white.withAlphaComponent(near ? 1 : 0.45).cgColor
+            self.grabBar.transform = near
+                ? CGAffineTransform(scaleX: 1.7, y: 1.0)
+                : .identity
+        }
+    }
+
+    private var grabBarNear = false
 
     func setContent(_ view: UIView) {
         content?.removeFromSuperview()
@@ -163,6 +193,13 @@ final class SpatialWindowView: UIView {
         contentContainer.frame = CGRect(x: 0, y: Self.headerHeight,
                                         width: bounds.width,
                                         height: max(0, bounds.height - Self.headerHeight))
+
+        // Barra de agarre: fina, al costado izquierdo, casi toda la altura.
+        let barWidth: CGFloat = 9
+        let barHeight = max(70, min(bounds.height * 0.72, 220))
+        grabBar.bounds = CGRect(x: 0, y: 0, width: barWidth, height: barHeight)
+        grabBar.center = CGPoint(x: -barWidth / 2 - 9, y: bounds.height / 2)
+        grabBar.layer.cornerRadius = barWidth / 2
 
         let buttonSize: CGFloat = 30
         let buttonY = (Self.headerHeight - buttonSize) / 2

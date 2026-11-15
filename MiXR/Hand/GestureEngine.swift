@@ -22,6 +22,15 @@ final class GestureEngine {
     private var startHandSize: CGFloat = 0
     private var startDepth: Float = 0
     private var depthRatio: Float = 1
+    /// Eje de visión al momento de agarrar y resto del vector de posición:
+    /// así el empuje en profundidad no se mezcla con el movimiento lateral.
+    private var startForward = simd_float3(0, 0, -1)
+    private var startLateral = simd_float3.zero
+    /// Distancia al agarrar: la ventana (la del mundo) y la mano (la del LiDAR).
+    private var appliedDistance: CGFloat = 0
+    private var startHandDepth: Float = 0
+    /// Última distancia LiDAR a la mano (la escribe `update`).
+    private var latestHandDepth: Float?
     private var applied: CGSize = .zero
     private var lastPoint: CGPoint?
     private var lastSeenAt: CFTimeInterval = 0
@@ -31,6 +40,8 @@ final class GestureEngine {
     private var resizeStartWidth: CGFloat = 0
 
     private var latch: [String: Bool] = [:]
+    /// Ventana cuya barra de agarre está iluminada.
+    private var barWindow: SpatialWindow?
     /// Cuántos frames seguidos la mano viene cerrada (debounce del agarre).
     private var grabStreak: [String: Int] = [:]
     private let grabFrames = 3
@@ -58,11 +69,14 @@ final class GestureEngine {
         dragKey = nil
         twoHandResize = false
         latch.removeAll()
+        barWindow?.view.setGrabBar(near: false)
+        barWindow = nil
     }
 
     func update(poses: [HandPose], host: WindowHostView, handDepth: Float? = nil) {
         guard let pose = host.lastPose else { return }
         let now = CACurrentMediaTime()
+        latestHandDepth = handDepth
 
         // 1. Pinza por mano, con histéresis.
         var pinching: [HandPose] = []
@@ -130,11 +144,20 @@ final class GestureEngine {
         guard let window = grabbed else {
             // Zona muerta: no se reacciona cerca de los bordes.
             if safe.width > 1, pinching.contains(where: { !safe.contains(dragPoint($0)) }) {
+                updateBarHighlight(nil)
                 return
             }
             updateHover(poses: poses, host: host)
-            if let first = pinching.first, let target = host.window(at: dragPoint(first)) {
-                begin(window: target, with: first, host: host)
+            updateBarHighlight(poses.first.flatMap { host.window(atBar: $0.palmCenter) })
+
+            // La barra del costado manda: es el agarre de la ventana.
+            if let first = pinching.first {
+                let point = dragPoint(first)
+                if let byBar = host.window(atBar: point) {
+                    begin(window: byBar, with: first, host: host)
+                } else if let target = host.window(at: point) {
+                    begin(window: target, with: first, host: host)
+                }
             }
             return
         }
@@ -211,34 +234,34 @@ final class GestureEngine {
         let lateral = right * Float(total.width / pointsPerMeter)
             + up * Float(-total.height / pointsPerMeter)
 
-        // Profundidad: sólo si la mano está casi quieta en el plano. Si está
-        // recorriendo, no se toca: así sigue el recorrido sin desviarse.
-        let moved = hypot(total.width - applied.width, total.height - applied.height)
-
-        if false /* una mano no cambia el tamaño: eso es con dos manos */ , moved < 2.0 {
-            // 1) LiDAR: distancia real en metros (preciso).
-            // 2) Respaldo: tamaño aparente de la mano.
-            var raw: Float?
-            if let handDepth, startDepth > 0.1 {
-                raw = Float(CGFloat(startDepth) / CGFloat(handDepth))
+        // ---- Profundidad (LiDAR): alejar / traer la ventana ----
+        // La ventana se mueve en el eje de visión lo mismo que se mueve la mano
+        // hacia adelante o hacia atrás. Suavizado + zona muerta: queda firme.
+        if startHandDepth > 0.1, let handDepth, handDepth > 0.1 {
+            let startDistance = CGFloat(startDepth)
+            let push = CGFloat(startHandDepth) - CGFloat(handDepth)   // + = la acercó
+            let target = startDistance - push * Config.windowDepthGain
+            let clamped = min(max(target, Config.minWindowDistance), Config.maxWindowDistance)
+            if abs(clamped - appliedDistance) > 0.015 {
+                appliedDistance += (clamped - appliedDistance) * 0.20
             } else {
-                let size = handSize(of: hand)
-                if startHandSize > 4, size > 4 {
-                    raw = Float(startHandSize / size)
-                }
+                appliedDistance = clamped
             }
-
-            if let raw {
-                let clamped = min(max(raw, 0.6), 1.7)
-                if abs(clamped - 1) > 0.03 || abs(depthRatio - 1) > 0.03 {
-                    depthRatio += (clamped - depthRatio) * (handDepth != nil ? 0.25 : 0.12)
-                }
+        } else if startHandDepth > 0.1 {
+            // Sin LiDAR: respaldo con el tamaño aparente de la mano.
+            let size = handSize(of: hand)
+            if startHandSize > 4, size > 4 {
+                let ratio = min(max(CGFloat(startHandSize / size), 0.6), 1.7)
+                let target = CGFloat(startDepth) * ratio
+                appliedDistance += (target - appliedDistance) * 0.12
             }
         }
         applied = total
 
-        let base = startPosition + lateral
-        let position = startCamera + (base - startCamera) * depthRatio
+        let position = startCamera
+            + startForward * Float(appliedDistance)
+            + startLateral
+            + lateral
         host.setPosition(window, position)
     }
 
@@ -266,9 +289,19 @@ final class GestureEngine {
         startHandSize = handSize(of: hand)
         if let current = host.lastPose, let projection = current.project(window.position) {
             startDepth = projection.depth
+
+            let column = current.transform.columns.2
+            startForward = -simd_float3(column.x, column.y, column.z)
+            let distance = Float(projection.depth)
+            startLateral = startPosition - startCamera - startForward * distance
+            appliedDistance = CGFloat(projection.depth)
         } else {
             startDepth = 0
+            startForward = simd_float3(0, 0, -1)
+            startLateral = .zero
+            appliedDistance = 1
         }
+        startHandDepth = latestHandDepth ?? 0
         depthRatio = 1
         twoHandResize = false
         lastSeenAt = CACurrentMediaTime()
@@ -280,11 +313,21 @@ final class GestureEngine {
     private func end(host: WindowHostView) {
         if let window = grabbed {
             host.setGrabbed(window, grabbed: false)
+            window.view.setGrabBar(near: false)
         }
         grabbed = nil
         dragKey = nil
         twoHandResize = false
         depthRatio = 1
+        barWindow = nil
+    }
+
+    /// Enciende la barra de la ventana que está bajo la mano.
+    private func updateBarHighlight(_ window: SpatialWindow?) {
+        guard barWindow !== window else { return }
+        barWindow?.view.setGrabBar(near: false)
+        window?.view.setGrabBar(near: true)
+        barWindow = window
     }
 
     /// Resalta el tile del menú que está debajo del dedo y acumula el dwell.

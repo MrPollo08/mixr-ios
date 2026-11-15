@@ -23,6 +23,13 @@ enum Config {
     static let minWindowWidth: CGFloat = 0.22
     static let maxWindowWidth: CGFloat = 1.80
 
+    /// Distancia (metros) a la que se puede empujar/traer una ventana con la mano.
+    static let minWindowDistance: CGFloat = 0.45
+    static let maxWindowDistance: CGFloat = 6.00
+    /// Cuánto se amplifica el empuje de la mano al alejar una ventana
+    /// (1 = la ventana se aleja exactamente lo que la mano).
+    static let windowDepthGain: CGFloat = 1.8
+
     /// Rango de profundidad en el que se dibuja una ventana (metros).
     static let minDepth: Float = 0.25
     static let maxDepth: Float = 9.0

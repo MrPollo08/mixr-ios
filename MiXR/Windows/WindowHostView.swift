@@ -361,4 +361,31 @@ final class WindowHostView: UIView {
         }
         return nil
     }
+
+    /// Rectángulo de la barra de agarre de una ventana, en coordenadas del host
+    /// (el panel está dibujado con `layer.transform`, así que se escala igual).
+    func grabBarRect(for window: SpatialWindow, margin: CGFloat = 20) -> CGRect {
+        guard !window.view.isHidden else { return .zero }
+        let bar = window.view.grabBarFrame
+        let base = window.view.baseSize
+        guard bar.width > 0.5, base.width > 1, window.pointsPerMeter > 1 else { return .zero }
+
+        let scale = (window.physicalWidth * window.pointsPerMeter) / base.width
+        let center = window.view.center
+        let rect = CGRect(x: center.x + (bar.minX - base.width / 2) * scale,
+                          y: center.y + (bar.minY - base.height / 2) * scale,
+                          width: bar.width * scale,
+                          height: bar.height * scale)
+        guard rect.width.isFinite, rect.height.isFinite else { return .zero }
+        return rect.insetBy(dx: -margin, dy: -margin * 0.5)
+    }
+
+    /// ¿La mano está sobre la barra de alguna ventana? Es el agarre.
+    func window(atBar point: CGPoint) -> SpatialWindow? {
+        for window in windows.reversed() where !window.view.isHidden {
+            let rect = grabBarRect(for: window)
+            if rect.width > 0, rect.contains(point) { return window }
+        }
+        return nil
+    }
 }

@@ -61,4 +61,13 @@ final class SkyboxVideoNode: SCNNode {
     func follow(_ position: simd_float3) {
         self.position = SCNVector3(position.x, position.y, position.z)
     }
+
+    /// Pausa el video (cuando el ambiente está apagado o no se está en VR).
+    func setPaused(_ paused: Bool) {
+        if paused {
+            player.pause()
+        } else {
+            player.play()
+        }
+    }
 }

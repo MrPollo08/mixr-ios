@@ -7,6 +7,8 @@ import UIKit
 final class StereoPane: UIView {
 
     let background = CameraSampleView()
+    /// Fondo 360 renderizado (Dreamspace en VR). Tapa la cámara cuando hay imagen.
+    let environmentView = UIImageView()
     let host = WindowHostView()
     let overlay = HandOverlayView()
 
@@ -23,6 +25,7 @@ final class StereoPane: UIView {
         addSubview(stage)
 
         stage.addSubview(background)
+        stage.addSubview(environmentView)
         stage.addSubview(host)
         stage.addSubview(overlay)
 
@@ -40,6 +43,12 @@ final class StereoPane: UIView {
 
         background.isUserInteractionEnabled = false
         overlay.isUserInteractionEnabled = false
+
+        environmentView.contentMode = .scaleAspectFill
+        environmentView.clipsToBounds = true
+        environmentView.isHidden = true
+        environmentView.isUserInteractionEnabled = false
+        environmentView.backgroundColor = .black
     }
 
     required init?(coder: NSCoder) {
@@ -74,6 +83,7 @@ final class StereoPane: UIView {
                                   y: (side - scaled.height) / 2,
                                   width: scaled.width,
                                   height: scaled.height)
+        environmentView.frame = background.frame
 
         host.bounds = CGRect(origin: .zero, size: containerSize)
         host.center = CGPoint(x: side / 2, y: side / 2)
@@ -88,5 +98,11 @@ final class StereoPane: UIView {
 
     func render(poses: [HandPose]) {
         overlay.render(poses: poses)
+    }
+
+    /// Fondo 360 renderizado para este ojo (nil = se ve la cámara).
+    func showEnvironment(_ image: UIImage?) {
+        environmentView.image = image
+        environmentView.isHidden = (image == nil)
     }
 }
