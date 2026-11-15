@@ -185,6 +185,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         defaults.set(Double(vrScale), forKey: "mixr.vrScale")
         defaults.set(Double(vrSeparation), forKey: "mixr.vrSeparation")
         defaults.set(Double(vrVertical), forKey: "mixr.vrVertical")
+        defaults.set(stereoEnabled, forKey: "mixr.stereo")
     }
 
     private func loadVRSettings() {

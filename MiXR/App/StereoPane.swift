@@ -2,9 +2,8 @@ import UIKit
 
 /// Una mitad de la pantalla, para un ojo.
 ///
-/// Muestra la **misma escena** que la vista normal pero escalada al 50%, con un
-/// pequeño desplazamiento horizontal por ojo (paralaje). Es el modo para poner
-/// el teléfono en las gafas VR: cada ojo ve su mitad.
+/// Cada ojo ve un **marco cuadrado redondeado** (como el visor de PC), con la
+/// escena recortada adentro: nada (ni el menú) puede salirse del marco.
 final class StereoPane: UIView {
 
     let background = CameraSampleView()
@@ -12,17 +11,32 @@ final class StereoPane: UIView {
     let overlay = HandOverlayView()
 
     private let stage = UIView()
+    private let vignette = CAGradientLayer()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .black
         clipsToBounds = true
 
-        stage.backgroundColor = .clear
+        stage.backgroundColor = .black
+        stage.clipsToBounds = true
         addSubview(stage)
+
         stage.addSubview(background)
         stage.addSubview(host)
         stage.addSubview(overlay)
+
+        // Viñeta: oscurece los bordes, como la lente del visor.
+        vignette.type = .radial
+        vignette.colors = [
+            UIColor.clear.cgColor,
+            UIColor.clear.cgColor,
+            UIColor.black.withAlphaComponent(0.55).cgColor
+        ]
+        vignette.locations = [0.0, 0.62, 1.0]
+        vignette.startPoint = CGPoint(x: 0.5, y: 0.5)
+        vignette.endPoint = CGPoint(x: 1.05, y: 1.05)
+        stage.layer.addSublayer(vignette)
 
         background.isUserInteractionEnabled = false
         overlay.isUserInteractionEnabled = false
@@ -32,28 +46,42 @@ final class StereoPane: UIView {
         fatalError("init(coder:) no se usa")
     }
 
-    /// Arma la escena en coordenadas de pantalla completa y la escala a la mitad.
+    /// Arma el marco cuadrado y encaja la escena adentro (recortando, no
+    /// deformando), así el mundo se ve natural y las ventanas quedan alineadas.
     func layoutScene(containerSize: CGSize, scale: CGFloat, eyeShift: CGFloat, verticalOffset: CGFloat) {
-        guard containerSize.width > 1, containerSize.height > 1 else { return }
+        guard containerSize.width > 10, containerSize.height > 10,
+              bounds.width > 10, bounds.height > 10 else { return }
 
-        let scaled = CGSize(width: containerSize.width * scale,
-                            height: containerSize.height * scale)
-        stage.bounds = CGRect(origin: .zero, size: scaled)
-        stage.center = CGPoint(x: bounds.midX, y: bounds.midY + verticalOffset)
-        stage.transform = CGAffineTransform(translationX: eyeShift, y: 0)
+        let side = min(bounds.width * 0.97, bounds.height * scale * 1.9)
+        guard side > 20 else { return }
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        background.frame = CGRect(origin: .zero, size: scaled)
+        stage.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+        stage.center = CGPoint(x: bounds.midX + eyeShift, y: bounds.midY + verticalOffset)
+        stage.layer.cornerRadius = side * 0.10
+        stage.layer.cornerCurve = .continuous
+
+        vignette.frame = CGRect(x: 0, y: 0, width: side, height: side)
+
+        // Recorte "aspect fill" dentro del cuadrado.
+        let fill = side / min(containerSize.width, containerSize.height)
+        let scaled = CGSize(width: containerSize.width * fill,
+                            height: containerSize.height * fill)
+
+        background.frame = CGRect(x: (side - scaled.width) / 2,
+                                  y: (side - scaled.height) / 2,
+                                  width: scaled.width,
+                                  height: scaled.height)
 
         host.bounds = CGRect(origin: .zero, size: containerSize)
-        host.center = CGPoint(x: scaled.width / 2, y: scaled.height / 2)
-        host.transform = CGAffineTransform(scaleX: scale, y: scale)
+        host.center = CGPoint(x: side / 2, y: side / 2)
+        host.transform = CGAffineTransform(scaleX: fill, y: fill)
 
         overlay.bounds = CGRect(origin: .zero, size: containerSize)
-        overlay.center = CGPoint(x: scaled.width / 2, y: scaled.height / 2)
-        overlay.transform = CGAffineTransform(scaleX: scale, y: scale)
+        overlay.center = CGPoint(x: side / 2, y: side / 2)
+        overlay.transform = CGAffineTransform(scaleX: fill, y: fill)
 
         CATransaction.commit()
     }

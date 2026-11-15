@@ -1,6 +1,7 @@
 import SwiftUI
 
 /// HUD mínimo: la app se maneja con el menú flotante y las manos.
+/// En modo VR el HUD se esconde: cada ojo ve solo su marco.
 struct RootView: View {
     @ObservedObject var session: XRSession
 
@@ -17,46 +18,48 @@ struct RootView: View {
             XRCameraView(session: session)
                 .ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                HStack(spacing: 7) {
-                    chip("\(session.handCount)",
-                         color: session.handCount > 0 ? .green : .orange,
-                         symbol: "hand.raised.fill")
+            if !session.stereoEnabled {
+                VStack(spacing: 0) {
+                    HStack(spacing: 7) {
+                        chip("\(session.handCount)",
+                             color: session.handCount > 0 ? .green : .orange,
+                             symbol: "hand.raised.fill")
 
-                    chip(session.cameraMode.label, color: .cyan, symbol: "camera.viewfinder")
+                        chip(session.cameraMode.label, color: .cyan, symbol: "camera.viewfinder")
 
-                    if session.controlMode {
-                        chip("Mouse PC", color: .green, symbol: "cursorarrow")
+                        if session.controlMode {
+                            chip("Mouse PC", color: .green, symbol: "cursorarrow")
+                        }
+
+                        Spacer(minLength: 0)
                     }
 
                     Spacer(minLength: 0)
+
+                    HStack {
+                        Spacer(minLength: 0)
+                        Text(session.debugText)
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.85))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(Color.black.opacity(0.55)))
+                    }
+                    .padding(.bottom, 4)
+
+                    Text(hintText)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(session.controlMode ? .green : .white.opacity(0.55))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.black.opacity(0.35)))
                 }
-
-                Spacer(minLength: 0)
-
-                HStack {
-                    Spacer(minLength: 0)
-                    Text(session.debugText)
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.85))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.black.opacity(0.55)))
-                }
-                .padding(.bottom, 4)
-
-                Text(hintText)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(session.controlMode ? .green : .white.opacity(0.55))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Color.black.opacity(0.35)))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
 
             if let message = session.unsupportedMessage {
                 unsupported(message)
