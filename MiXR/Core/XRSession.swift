@@ -492,6 +492,15 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             pose = wideView.currentPose(viewport: viewport, orientation: orientation)
         }
 
+        // Fusion LiDAR: corrige la traslacion que ARKit no entrega en limited.
+        if cameraMode == .arkit, let frame = arSession.currentFrame, let basePose = pose {
+            let correction = depthAxis.correction(depthMap: frame.sceneDepth?.depthMap,
+                                                  cameraTransform: frame.camera.transform)
+            if let correction, abs(correction) > 0.04 {
+                pose = basePose.moved(alongView: -correction)
+            }
+        }
+
         guard let pose else { return }
         lastPose = pose
 
