@@ -42,13 +42,16 @@ final class SkyboxVideoNode: SCNNode {
         // encima de la línea de los ojos y sólo se ve mar. Se sube la textura
         // para que el horizonte caiga justo en el ecuador de la esfera.
         material.diffuse.wrapS = .repeat
-        material.diffuse.wrapT = .clampToEdge
+        material.diffuse.wrapT = .clamp
         material.diffuse.contentsTransform = SCNMatrix4MakeTranslation(0, Self.horizonOffset, 0)
 
         sphere.firstMaterial = material
 
         geometry = sphere
         name = "skyboxVideo"
+        // Después de la malla de oclusión (orden -1000): así la cama y la pared
+        // tapan la tormenta en vez de quedar detrás.
+        renderingOrder = 10
     }
 
     required init?(coder: NSCoder) {

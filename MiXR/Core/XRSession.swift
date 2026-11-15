@@ -65,6 +65,8 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private let stereoRoot = UIView()
     /// Mitad (ojo) sobre la que está actuando la mano en modo VR.
     private var vrTargetPane: StereoPane?
+    /// Recorta el fondo 360 con la malla del LiDAR (cama, pared, muebles).
+    private lazy var meshOccluder = SceneMeshOccluder(parent: sceneView.scene.rootNode)
 
     override init() {
         super.init()
@@ -579,6 +581,12 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                 }
 
                 updateDebug(frame: frame, usingUltraWide: Self.useUltraWideImage && useUltraWide)
+
+                // El cuarto real recorta el fondo 360 (cama, pared, muebles).
+                if sceneView.scene.rootNode.childNode(withName: "skyboxVideo",
+                                                      recursively: false) != nil {
+                    meshOccluder.update(frame: frame)
+                }
             }
 
         case .ultraWide:
