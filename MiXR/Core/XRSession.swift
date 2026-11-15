@@ -383,11 +383,30 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
     // MARK: - Menú flotante
 
+    private func saveMenuPosition(_ position: simd_float3) {
+        let defaults = UserDefaults.standard
+        defaults.set(Double(position.x), forKey: "mixr.menuX")
+        defaults.set(Double(position.y), forKey: "mixr.menuY")
+        defaults.set(Double(position.z), forKey: "mixr.menuZ")
+    }
+
+    private func loadMenuPosition() -> simd_float3? {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: "mixr.menuX") != nil else { return nil }
+        return simd_float3(Float(defaults.double(forKey: "mixr.menuX")),
+                           Float(defaults.double(forKey: "mixr.menuY")),
+                           Float(defaults.double(forKey: "mixr.menuZ")))
+    }
+
     private func ensureMenu() {
         if let existing = menuWindow, hostView.windows.contains(where: { $0 === existing }) {
             return
         }
         let position = positionInFrontOfCamera(index: 0, distance: Config.menuDistance)
+        // Si ya hay una posición guardada, se usa ESA: el menú queda
+        // clavado en el mundo y no puede volver a aparecer delante tuyo.
+        let savedPosition = loadMenuPosition()
+        saveMenuPosition(position)
         let window = hostView.add(kind: .menu, position: position, physicalWidth: Config.menuWidth)
         menuWindow = window
 
