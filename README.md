@@ -180,6 +180,10 @@ MiXR/
   App/XRCameraView.swift        puente SwiftUI ↔ UIKit
   Core/Config.swift             constantes (distancias, puertos, límites)
   Core/XRSession.swift          orquesta ARKit + manos + ventanas + control
+  RealityKit/                   migración al efecto Dreamspace (apagada por ahora)
+    DreamspaceRenderer.swift    ARView + oclusión LiDAR + cielo + panel entidad
+    SkyboxEntity.swift          cielo virtual como entidad (gradiente 2:1)
+    RealityPanelEntity.swift    panel como entidad con textura generada
   Hand/HandTracker.swift        Vision: 21 puntos → pantalla (con suavizado)
   Hand/HandOverlayView.swift    esqueleto + retícula, CAShapeLayer
   Hand/GestureEngine.swift      pinza → agarrar / escalar ventanas
@@ -225,6 +229,38 @@ articulación y se calcula la pinza con la fórmula del port de MediaPipe
 `uint16` en un datagrama UDP al PC, que hace `SetCursorPos`. La pinza manda
 botón abajo/arriba. Si se pierde la mano, se suelta el botón (nunca queda
 pegado).
+
+### Migración a RealityKit (efecto Dreamspace)
+
+La app está migrando de SceneKit a RealityKit por partes. El **commit 1** deja
+todo armado pero **apagado**: con `XRSession.useRealityKit = false` la app
+funciona exactamente como antes (`ARSCNView`) y no se crea ninguna `ARView`.
+
+Con el interruptor en `true`:
+
+| Pieza | Qué hace |
+|---|---|
+| `ARView` | reemplaza al `ARSCNView` y comparte el **mismo** `ARSession` (una cámara, un tracking, las manos siguen leyendo `currentFrame`) |
+| `sceneReconstruction = .meshWithClassification` | malla del LiDAR de la habitación (ya se pedía en la configuración) |
+| `environment.sceneUnderstanding.options = .occlusion` | los objetos reales tapan lo virtual |
+| `SkyboxEntity` | cielo virtual pegado a la cámara: esfera de 8 m con un gradiente de prueba |
+| `RealityPanelEntity` | panel de prueba como entidad, con la textura generada en runtime |
+
+Para probarlo: poner `useRealityKit` en `true` en `Core/XRSession.swift`,
+compilar y apuntar a una mesa o pasar la mano delante del panel: el panel
+desaparece detrás de lo real. En un iPhone sin LiDAR no hay malla y por lo
+tanto no hay oclusión (el resto sí funciona).
+
+El cielo es una **entidad** y no `environment.background = .skybox(…)` a
+propósito: generar un `EnvironmentResource` desde una imagen en runtime cambia
+entre versiones del SDK, mientras que una esfera invertida compila igual en
+iOS 16+ y se puede reemplazar por un modelo o una imagen real sin tocar el
+resto.
+
+Falta para los próximos commits: mover las ventanas de UIKit a entidades
+(textura en vivo del stream en un `VideoMaterial`), llevar el arrastre con las
+manos a `Entity.position` y decidir si el fondo queda en el feed de la cámara
+o si el cielo lo reemplaza.
 
 ---
 

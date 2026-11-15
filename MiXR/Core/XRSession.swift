@@ -71,6 +71,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
     private static let modeKey = "mixr.cameraMode"
 
+    /// Interruptor de la migración al efecto Dreamspace con RealityKit.
+    ///
+    /// - `false` (commit 1): la app sigue con SceneKit (`ARSCNView`), que es
+    ///   el camino estable. Nada de lo nuevo se ejecuta.
+    /// - `true`: `ARView` ocupa el lugar del `ARSCNView`, con oclusión por la
+    ///   malla del LiDAR, cielo virtual y paneles como entidades.
+    static let useRealityKit = false
+
     /// Siempre 1× con ARKit (6DoF): es el único modo donde las ventanas quedan
     /// clavadas en el mundo y no te siguen. La 0.5× no tiene traslación, así
     /// que se descartó (quedó el código por si algún día vuelve como opción).
@@ -86,6 +94,13 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     // MARK: - Vistas de UIKit
 
     let sceneView = ARSCNView()
+    /// Motor RealityKit del efecto Dreamspace. Es `lazy` para que con
+    /// `useRealityKit = false` no exista ninguna `ARView` en memoria.
+    private lazy var realityRenderer = DreamspaceRenderer()
+    /// Vista de RealityKit, sólo cuando la migración está encendida.
+    private var realityView: UIView? {
+        Self.useRealityKit ? realityRenderer.view : nil
+    }
     let cameraSampleView = CameraSampleView()
     let wideView = WideCameraView()
     let hostView = WindowHostView()
@@ -138,7 +153,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         view.clipsToBounds = true
 
         // De abajo a arriba: cámara, ventanas, manos (oclusión), esqueleto.
-        let stack: [UIView] = [cameraSampleView, sceneView, wideView, hostView, occlusionView, overlay]
+        var stack: [UIView] = [cameraSampleView, sceneView, wideView, hostView, occlusionView, overlay]
+        // RealityKit va en el mismo lugar que el ARSCNView: los dos dibujan la
+        // cámara y la escena 3D, nunca se muestran juntos.
+        if let rkView = self.realityView {
+            rkView.isHidden = true
+            rkView.isUserInteractionEnabled = false
+            stack.insert(rkView, at: 1)
+        }
         for subview in stack {
             subview.frame = view.bounds
             subview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -263,7 +285,15 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                 configuration.frameSemantics.insert(.sceneDepth)
             }
 
-            sceneView.session = arSession
+            if Self.useRealityKit {
+                // RealityKit usa la MISMA sesión de ARKit: una sola cámara y
+                // un solo tracking. El ARSCNView se desengancha para que no
+                // haya dos renderers peleando por la sesión (y su delegate).
+                sceneView.session = nil
+                realityRenderer.attach(session: arSession)
+            } else {
+                sceneView.session = arSession
+            }
             sceneView.automaticallyUpdatesLighting = false
             sceneView.antialiasingMode = .none
             sceneView.preferredFramesPerSecond = 60
@@ -278,7 +308,9 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             arSession.run(configuration, options: options)
 
             // Panel 3D de prueba: objeto real en el mundo (se puede rodear).
-            if sceneView.scene.rootNode.childNode(withName: "scenePanel", recursively: false) == nil {
+            // En RealityKit ese panel ya es una entidad de la escena.
+            if !Self.useRealityKit,
+               sceneView.scene.rootNode.childNode(withName: "scenePanel", recursively: false) == nil {
                 let panel = ScenePanelNode()
                 panel.position = SCNVector3(0, 1.35, -1.6)
                 sceneView.scene.rootNode.addChildNode(panel)
@@ -326,7 +358,10 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
     private func applyModeVisibility() {
         wideView.isHidden = cameraMode != .ultraWide
-        sceneView.isHidden = cameraMode != .arkit
+        // SceneKit y RealityKit son excluyentes: uno de los dos dibuja la
+        // cámara y la escena 3D.
+        sceneView.isHidden = cameraMode != .arkit || Self.useRealityKit
+        realityView?.isHidden = cameraMode != .arkit || !Self.useRealityKit
         occlusionView.isHidden = !occlusionEnabled
         if occlusionView.isHidden { occlusionView.clear() }
         // cameraSampleView queda oculto salvo que se use la imagen 0.5×.
@@ -513,7 +548,8 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                     buffer = validUltraWide
                 } else {
                     cameraSampleView.isHidden = true
-                    sceneView.isHidden = false
+                    sceneView.isHidden = Self.useRealityKit
+                    realityView?.isHidden = !Self.useRealityKit
 
                     let imageSize = CGSize(width: CVPixelBufferGetWidth(frame.capturedImage),
                                            height: CVPixelBufferGetHeight(frame.capturedImage))
@@ -700,6 +736,8 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         for monoView in monoViews {
             monoView.isHidden = stereoEnabled
         }
+        // La vista de RealityKit no está en `monoViews` (puede no existir).
+        realityView?.isHidden = stereoEnabled || !Self.useRealityKit
 
         if stereoEnabled {
             buildMirrorWindows()
