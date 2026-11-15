@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Pantalla principal: la cámara 0.5x con el monitor encima y un menú táctil.
+/// Pantalla principal: la cámara de ARKit con el monitor encima y un menú táctil.
 ///
-/// No hay tiles ni apps: sólo conectar la PC, el mouse y cerrar.
+/// No hay tiles ni apps: conectar la PC, fijarla en la mesa, mouse y cerrar.
 struct RootView: View {
     @ObservedObject var session: XRSession
 
@@ -23,6 +23,12 @@ struct RootView: View {
             HStack(spacing: 8) {
                 action("Monitor PC", symbol: "display", filled: true) {
                     session.connectPC()
+                }
+                action("Fijar en mesa", symbol: "square.dashed", filled: false) {
+                    session.snapMonitorToSurface()
+                }
+                action("Centrar", symbol: "scope", filled: false) {
+                    session.centerMonitor()
                 }
                 action(session.mouseEnabled ? "Mouse ON" : "Mouse",
                        symbol: "cursorarrow",
