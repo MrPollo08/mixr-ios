@@ -178,7 +178,7 @@ final class XRSession: NSObject, ObservableObject {
         }
 
         let viewport = containerView.bounds.size
-        let center = CGPoint(x: viewport.midX, y: viewport.midY)
+        let center = CGPoint(x: viewport.width / 2, y: viewport.height / 2)
         let results = sceneView.hitTest(center,
                                         types: [.existingPlaneUsingExtent,
                                                 .existingPlane,
