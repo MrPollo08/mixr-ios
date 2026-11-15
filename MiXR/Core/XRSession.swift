@@ -66,6 +66,8 @@ final class XRSession: NSObject, ObservableObject {
     /// Cámara nítida, en el rectángulo que corresponde.
     let camera = CameraSampleView()
     let hostView = WindowHostView()
+    /// Dibuja la mano real **por encima** de las ventanas (efecto de agarre).
+    let occlusionView = HandOcclusionView()
     let overlay = HandOverlayView()
 
     // Dos mitades, una por ojo (VR box).
@@ -87,6 +89,8 @@ final class XRSession: NSObject, ObservableObject {
     private var arStarted = false
     private var lastPose: CameraPose?
     private var lastHands: [HandPose] = []
+    /// Último frame de cámara (para la oclusión de la mano).
+    private var lastBuffer: CVPixelBuffer?
     private weak var monitor: SpatialWindow?
     private var wasDragging = false
     private var gamepadMoving = false
@@ -102,7 +106,7 @@ final class XRSession: NSObject, ObservableObject {
         backdrop.videoGravity = .resizeAspectFill
         camera.videoGravity = .resize
 
-        for subview in [backdrop, dim, camera, hostView, overlay] as [UIView] {
+        for subview in [backdrop, dim, camera, hostView, occlusionView, overlay] as [UIView] {
             subview.frame = view.bounds
             subview.autoresizingMask = []
             view.addSubview(subview)
@@ -154,6 +158,7 @@ final class XRSession: NSObject, ObservableObject {
         arSession.pause()
         arStarted = false
         gestures.reset()
+        occlusionView.clear()
     }
 
     private func startARKit() {
@@ -401,6 +406,8 @@ final class XRSession: NSObject, ObservableObject {
         let rect = Self.cameraRect(aspect: aspect, screen: screen, fraction: visibleFraction)
 
         camera.frame = rect
+        occlusionView.frame = rect
+        occlusionView.isHidden = stereoEnabled
         hostView.bounds = CGRect(origin: .zero, size: rect.size)
         hostView.center = CGPoint(x: rect.midX, y: rect.midY)
         overlay.bounds = hostView.bounds
@@ -408,6 +415,7 @@ final class XRSession: NSObject, ObservableObject {
 
         camera.enqueue(frame.capturedImage)
         backdrop.enqueue(frame.capturedImage)
+        lastBuffer = frame.capturedImage
         let pose = CameraPose(arkitCamera: frame.camera,
                               orientation: orientation,
                               viewport: rect.size,
@@ -450,6 +458,15 @@ final class XRSession: NSObject, ObservableObject {
     private func apply(_ poses: [HandPose], pose: CameraPose) {
         lastHands = poses
         if handCount != poses.count { handCount = poses.count }
+
+        // La mano real se dibuja encima de las ventanas: así "agarra" de verdad.
+        if poses.isEmpty {
+            occlusionView.clear()
+        } else {
+            occlusionView.update(buffer: lastBuffer,
+                                 hands: poses,
+                                 orientation: ScreenOrientation.current)
+        }
 
         hostView.allowsPositionWrites = true
 
@@ -508,7 +525,7 @@ final class XRSession: NSObject, ObservableObject {
 
     private func applyStereoMode() {
         stereoRoot.isHidden = !stereoEnabled
-        for view in [backdrop, dim, camera, hostView, overlay] as [UIView] {
+        for view in [backdrop, dim, camera, hostView, occlusionView, overlay] as [UIView] {
             view.isHidden = stereoEnabled
         }
 
