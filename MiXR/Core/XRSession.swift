@@ -1,570 +1,138 @@
-import ARKit
 import AVFoundation
 import Combine
 import CoreVideo
-import PhotosUI
-import SceneKit
+import Foundation
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
+import Vision
 import simd
 
-/// Con qué cámara se ve el mundo.
-enum CameraMode: Equatable {
-    /// Ultra gran angular 0.5x (AVFoundation + CoreMotion, 3DoF).
-    /// Mucho más campo de visión: ideal para manos y para el efecto visor.
-    case ultraWide
-    /// Cámara normal con ARKit (6DoF, anclaje real al mundo).
-    case arkit
+/// Dreamspace (versión monitor): un monitor grande de la PC, cámara 0.5x y
+/// manos sólo para mover (pinza en el borde) y escalar (dos pinzas).
+///
+/// Sin ARKit, sin LiDAR, sin tiles: menú táctil y una sola ventana.
+final class XRSession: NSObject, ObservableObject {
 
-    var label: String {
-        switch self {
-        case .ultraWide: return "0.5×"
-        case .arkit: return "1×"
-        }
-    }
-
-    var trackingLabel: String {
-        switch self {
-        case .ultraWide: return "gran angular · 3DoF"
-        case .arkit: return "normal · 6DoF"
-        }
-    }
-}
-
-/// Orquesta todo: cámara (ARKit o gran angular), tracking de manos con Vision,
-/// ventanas flotantes ancladas al mundo y oclusión de manos.
-final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegate {
-
-    // MARK: - Estado que consume SwiftUI
+    // MARK: - Estado para SwiftUI
 
     @Published var handCount = 0
-    @Published var windowCount = 0
-    @Published var handsVisible = true
-    @Published var unsupportedMessage: String?
-    /// Modo control: la mano maneja el mouse del PC en vez de mover ventanas.
-    @Published var controlMode = false
-    /// IP del PC conectado (se detecta sola cuando llega el stream).
-    @Published var pcHost: String?
+    @Published var status = "Tocá «Monitor PC» para empezar"
+    @Published var localAddress = LocalIP.wifiAddress() ?? "sin Wi-Fi"
+    @Published var mouseEnabled = false
+    @Published var hasMonitor = false
 
-    @Published private(set) var cameraMode: CameraMode = XRSession.savedMode()
-    @Published private(set) var occlusionEnabled = false
-    /// Modo VR: la escena se dibuja dos veces, una por ojo.
-    @Published var stereoEnabled = true {
-        didSet { if stereoEnabled != oldValue { applyStereoMode() } }
-    }
-    /// Ajustes del marco de las gafas (pantalla previa a la cámara).
-    @Published var vrScale: CGFloat = 0.5 { didSet { saveVRSettings() } }
-    @Published var vrSeparation: CGFloat = 20 { didSet { saveVRSettings() } }
-    @Published var vrVertical: CGFloat = 0 { didSet { saveVRSettings() } }
-    /// Si está en true se muestra la pantalla de ajuste en vez de la cámara.
-    @Published var showsSetup = true
+    // MARK: - Vistas
 
-    private let leftPane = StereoPane()
-    private let rightPane = StereoPane()
-    private let stereoRoot = UIView()
-    /// Mitad (ojo) sobre la que está actuando la mano en modo VR.
-    private var vrTargetPane: StereoPane?
-
-    override init() {
-        super.init()
-        loadVRSettings()
-
-        // Mando Bluetooth: A abre/cierra el menú, B recentra.
-        gamepad.onPrimary = { [weak self] in self?.toggleMenuWithPalm() }
-        gamepad.onSecondary = { [weak self] in self?.recenterView() }
-    }
-
-    private static let modeKey = "mixr.cameraMode"
-
-    /// Interruptor de la migración al efecto Dreamspace con RealityKit.
-    ///
-    /// - `false` (commit 1): la app sigue con SceneKit (`ARSCNView`), que es
-    ///   el camino estable. Nada de lo nuevo se ejecuta.
-    /// - `true`: `ARView` ocupa el lugar del `ARSCNView`, con oclusión por la
-    ///   malla del LiDAR, cielo virtual y paneles como entidades.
-    static let useRealityKit = false
-
-    /// Siempre 1× con ARKit (6DoF): es el único modo donde las ventanas quedan
-    /// clavadas en el mundo y no te siguen. La 0.5× no tiene traslación, así
-    /// que se descartó (quedó el código por si algún día vuelve como opción).
-    private static func savedMode() -> CameraMode {
-        UserDefaults.standard.removeObject(forKey: modeKey)
-        return .arkit
-    }
-
-    private func saveMode() {
-        UserDefaults.standard.removeObject(forKey: Self.modeKey)
-    }
-
-    // MARK: - Vistas de UIKit
-
-    let sceneView = ARSCNView()
-    /// Motor RealityKit del efecto Dreamspace. Es `lazy` para que con
-    /// `useRealityKit = false` no exista ninguna `ARView` en memoria.
-    private lazy var realityRenderer = DreamspaceRenderer()
-    /// Vista de RealityKit, sólo cuando la migración está encendida.
-    private var realityView: UIView? {
-        Self.useRealityKit ? realityRenderer.view : nil
-    }
-    let cameraSampleView = CameraSampleView()
     let wideView = WideCameraView()
     let hostView = WindowHostView()
-    let occlusionView = HandOcclusionView()
     let overlay = HandOverlayView()
 
-    private let arSession = ARSession()
+    // MARK: - Motor
+
     private let tracker = HandTracker()
     private let gestures = GestureEngine()
-    let pointer = PointerController()
+    private let pointer = PointerController()
+    private let input = InputClient()
+    private let gamepad = GamepadController()
 
-    private var isRunning = false
     private var displayLink: CADisplayLink?
+    private var isRunning = false
     private var lastPose: CameraPose?
     private var lastHands: [HandPose] = []
-    private weak var menuWindow: SpatialWindow?
+    private weak var monitor: SpatialWindow?
 
-    /// Para re-anclar justo cuando se suelta una ventana.
-    private var wasDragging = false
-    /// Cuánto se corrieron las ventanas al pasar a 0.5x (para volver).
-    private var wideRebaseOffset = simd_float3.zero
-    /// Control con mando Bluetooth (el joystick mueve el menú).
-    private let gamepad = GamepadController()
-    /// El mando está moviendo el menú (para no re-anclarlo en el medio).
-    private var gamepadMoving = false
-    /// Hora del tick anterior (para el movimiento del mando).
-    private var lastTickAt: CFTimeInterval = 0
-
-    /// SceneKit puede devolver una cámara vieja si la vista no se está
-    /// renderizando (modo VR). Proyectamos con ARKit, que siempre está al día.
-    private static let useSceneKitProjector = false
-
-    /// Cuántas veces se lanzó ARKit y cuántos frames llegaron (diagnóstico).
-    private var arkitRuns = 0
-    private var frameCount = 0
-
-    /// Último frame bueno de la 0.5× (el buffer aparece sólo en algunos frames,
-    /// así que se reutiliza para que el fondo no parpadee).
-    private var ultraWideBuffer: CVPixelBuffer?
-    private var ultraWideAt: CFTimeInterval = 0
-
-    /// FPS reales de entrega de ARKit (diagnóstico).
-    private var lastFrameTime: TimeInterval = 0
-    private var smoothedFPS: Double = 0
-
-    /// Diagnóstico en pantalla (posición de la cámara y estado del tracking).
-    @Published var debugText = ""
-    private var lastDebugAt: CFTimeInterval = 0
-
-    /// Contenedor único que se entrega a SwiftUI.
-    lazy var containerView: UIView = {        let view = UIView(frame: .zero)
+    /// Vista que entrega SwiftUI: la cámara abajo y el monitor encima.
+    lazy var containerView: UIView = {
+        let view = UIView(frame: .zero)
         view.backgroundColor = .black
         view.clipsToBounds = true
 
-        // De abajo a arriba: cámara, ventanas, manos (oclusión), esqueleto.
-        var stack: [UIView] = [cameraSampleView, sceneView, wideView, hostView, occlusionView, overlay]
-        // RealityKit va en el mismo lugar que el ARSCNView: los dos dibujan la
-        // cámara y la escena 3D, nunca se muestran juntos.
-        if let rkView = self.realityView {
-            rkView.isHidden = true
-            rkView.isUserInteractionEnabled = false
-            stack.insert(rkView, at: 1)
-        }
-        for subview in stack {
+        for subview in [wideView, hostView, overlay] as [UIView] {
             subview.frame = view.bounds
             subview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             view.addSubview(subview)
         }
 
-        // Modo VR: dos mitades, una por ojo.
-        stereoRoot.frame = view.bounds
-        stereoRoot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        stereoRoot.backgroundColor = .black
-        stereoRoot.isHidden = true
-        view.addSubview(stereoRoot)
-        stereoRoot.addSubview(leftPane)
-        stereoRoot.addSubview(rightPane)
-        leftPane.host.session = self
-        rightPane.host.session = self
-
-        cameraSampleView.isHidden = true
-        sceneView.isUserInteractionEnabled = false
-        wideView.isUserInteractionEnabled = false
-        occlusionView.isUserInteractionEnabled = false
-        overlay.isUserInteractionEnabled = false
-
         hostView.session = self
-        hostView.onCountChanged = { [weak self] count in
-            guard let self, self.windowCount != count else { return }
-            self.windowCount = count
-        }
-
-        applyModeVisibility()
-        applyStereoMode()
+        overlay.isUserInteractionEnabled = false
+        overlay.showsSkeleton = false        // sin dibujos de la mano
+        wideView.isUserInteractionEnabled = false
         return view
     }()
 
-
-    // MARK: - Ajustes previos y arranque
-
-    /// Pasa de la pantalla de ajuste a la c�mara.
-    func startCamera() {
-        showsSetup = false
-        start()
+    override init() {
+        super.init()
+        gamepad.onPrimary = { [weak self] in self?.connectPC() }
+        gamepad.onSecondary = { [weak self] in self?.closeWindows() }
     }
 
-    /// Vuelve a la pantalla de ajuste (para calibrar el marco de las gafas).
-    func openSetup() {
-        pause()
-        showsSetup = true
-    }
-
-    private func saveVRSettings() {
-        let defaults = UserDefaults.standard
-        defaults.set(Double(vrScale), forKey: "mixr.vrScale")
-        defaults.set(Double(vrSeparation), forKey: "mixr.vrSeparation")
-        defaults.set(Double(vrVertical), forKey: "mixr.vrVertical")
-        defaults.set(stereoEnabled, forKey: "mixr.stereo")
-    }
-
-    private func loadVRSettings() {
-        let defaults = UserDefaults.standard
-        if defaults.object(forKey: "mixr.vrScale") != nil {
-            vrScale = CGFloat(defaults.double(forKey: "mixr.vrScale"))
-        }
-        if defaults.object(forKey: "mixr.vrSeparation") != nil {
-            vrSeparation = CGFloat(defaults.double(forKey: "mixr.vrSeparation"))
-        }
-        if defaults.object(forKey: "mixr.vrVertical") != nil {
-            vrVertical = CGFloat(defaults.double(forKey: "mixr.vrVertical"))
-        }
-    }
-        // MARK: - Ciclo de vida
+    // MARK: - Ciclo de vida
 
     func start() {
         guard !isRunning else { return }
-        gestures.onSummon = { [weak self] in
-            self?.summonMenu()
-        }
+        isRunning = true
+        localAddress = LocalIP.wifiAddress() ?? localAddress
+        wideView.start()
 
-        requestCameraPermission { [weak self] granted in
-            guard let self else { return }
-            guard granted else {
-                self.unsupportedMessage = "Falta el permiso de cámara. Activalo en Ajustes → MiXR."
-                return
-            }
-            self.beginSession()
-        }
-    }
-
-    private func requestCameraPermission(_ completion: @escaping (Bool) -> Void) {
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized:
-            completion(true)
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { granted in
-                DispatchQueue.main.async { completion(granted) }
-            }
-        default:
-            completion(false)
-        }
-    }
-
-    private func beginSession() {
-        if cameraMode == .arkit, !ARWorldTrackingConfiguration.isSupported {
-            cameraMode = .ultraWide
-        }
-
-        switch cameraMode {
-        case .arkit:
-            let configuration = ARWorldTrackingConfiguration()
-            configuration.worldAlignment = .gravity
-            // Solo rastreo visual + inercial (VIO). Nada de LiDAR ni de mapas
-            // de profundidad: funciona igual en cualquier iPhone compatible.
-            configuration.planeDetection = [.horizontal]
-            configuration.isLightEstimationEnabled = false
-            configuration.environmentTexturing = .none
-
-            if Self.useRealityKit {
-                // RealityKit usa la MISMA sesión de ARKit: una sola cámara y
-                // un solo tracking. El ARSCNView se desengancha para que no
-                // haya dos renderers peleando por la sesión (y su delegate).
-                // (no se puede desasignar la sesión: queda oculto y sin usar)
-                realityRenderer.attach(session: arSession)
-            } else {
-                sceneView.session = arSession
-            }
-            sceneView.automaticallyUpdatesLighting = false
-            sceneView.antialiasingMode = .none
-            sceneView.preferredFramesPerSecond = 60
-
-            // CLAVE: sólo el primer lanzamiento resetea el origen del mundo.
-            // Si se resetea de nuevo, el origen se mueve a donde estás parado y
-            // todo lo que estaba delante tuyo vuelve a aparecer delante tuyo
-            // (parece que las ventanas te siguen).
-            let options: ARSession.RunOptions = arkitRuns == 0
-                ? [.resetTracking, .removeExistingAnchors]
-                : []
-            arSession.run(configuration, options: options)
-
-            // Ambiente 360: el video de tormenta como fondo del cuarto.
-            if sceneView.scene.rootNode.childNode(withName: "skyboxVideo", recursively: false) == nil,
-               let url = Bundle.main.url(forResource: "stormy-ocean", withExtension: "mp4") {
-                sceneView.scene.rootNode.addChildNode(SkyboxVideoNode(url: url))
-            }
-
-            // Panel 3D de prueba: objeto real en el mundo (se puede rodear).
-            // En RealityKit ese panel ya es una entidad de la escena.
-            if !Self.useRealityKit,
-               sceneView.scene.rootNode.childNode(withName: "scenePanel", recursively: false) == nil {
-                let panel = ScenePanelNode()
-                panel.position = SCNVector3(0, 1.35, -1.6)
-                sceneView.scene.rootNode.addChildNode(panel)
-            }
-            arkitRuns += 1
-            wideView.stop()
-
-        case .ultraWide:
-            arSession.pause()
-            wideView.start()
-        }
-
-        applyModeVisibility()
-        applyStereoMode()
-
-        // Los frames se leen acá (no con el delegate de ARSession) para no
-        // pelearse con ARSCNView, que necesita quedarse con ese delegate.
         let link = CADisplayLink(target: self, selector: #selector(tick))
+        link.preferredFramesPerSecond = 60
         link.add(to: .main, forMode: .common)
         displayLink = link
 
-        isRunning = true
-        configureAudio()
-        UIApplication.shared.isIdleTimerDisabled = true
+        if status.isEmpty { status = "Cámara lista" }
     }
 
     func pause() {
-        guard isRunning else { return }
+        isRunning = false
         displayLink?.invalidate()
         displayLink = nil
-        arSession.pause()
         wideView.stop()
-        isRunning = false
-        UIApplication.shared.isIdleTimerDisabled = false
-    }
-
-    private func configureAudio() {
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            // Sin audio la app sigue siendo usable.
-        }
-    }
-
-    private func applyModeVisibility() {
-        wideView.isHidden = cameraMode != .ultraWide
-        // SceneKit y RealityKit son excluyentes: uno de los dos dibuja la
-        // cámara y la escena 3D.
-        sceneView.isHidden = cameraMode != .arkit || Self.useRealityKit
-        realityView?.isHidden = cameraMode != .arkit || !Self.useRealityKit
-        occlusionView.isHidden = !occlusionEnabled
-        if occlusionView.isHidden { occlusionView.clear() }
-        // cameraSampleView queda oculto salvo que se use la imagen 0.5×.
-    }
-
-    // MARK: - Cambiar de cámara / oclusión
-
-    func toggleCameraMode() {
-        setCameraMode(cameraMode == .ultraWide ? .arkit : .ultraWide)
-    }
-
-    /// Tile "0.5x": pasa a la ultra gran angular (AVFoundation) o vuelve al
-    /// 6DoF de ARKit. En 0.5x no hay anclaje de traslación (iOS no deja usar
-    /// ARKit y otra cámara a la vez): las ventanas quedan fijas a la rotación.
-    func toggleWide() {
-        if cameraMode == .ultraWide {
-            restoreWindowsAfterWide()
-            setCameraMode(.arkit)
-            return
-        }
-        rebaseWindowsToCamera()
-        setCameraMode(.ultraWide)
-    }
-
-    /// Al entrar a 0.5x el origen del mundo pasa a ser la cámara actual: se
-    /// corren las ventanas para que queden en la misma dirección (si no, el
-    /// menú aparecía descentrado).
-    private func rebaseWindowsToCamera() {
-        guard let pose = lastPose else { return }
-        let column = pose.transform.columns.3
-        let offset = simd_float3(column.x, column.y, column.z)
-        guard simd_length(offset) > 0.001 else { return }
-
-        wideRebaseOffset = offset
-        for window in hostView.windows {
-            window.position -= offset
-            window.smoothedCenter = nil
-            window.anchor = nil
-        }
-    }
-
-    private func restoreWindowsAfterWide() {
-        guard simd_length(wideRebaseOffset) > 0.001 else { return }
-        let offset = wideRebaseOffset
-        wideRebaseOffset = .zero
-        for window in hostView.windows {
-            window.position += offset
-            window.smoothedCenter = nil
-        }
-    }
-
-    func setCameraMode(_ mode: CameraMode) {
-        guard mode != cameraMode else { return }
-        let wasRunning = isRunning
-        pause()
-
-        cameraMode = mode
-        saveMode()
-        lastPose = nil
-        lastHands = []
-        overlay.render(poses: [])
-        overlay.setPointer(nil)
         gestures.reset()
-
-        if wasRunning { start() }
-        if mode == .ultraWide {
-            // La 0.5x no tiene 6DoF: se busca que "adelante" sea hacia donde
-            // mirás ahora, así las ventanas quedan en el mismo lugar.
-            wideView.recenter()
-            tracker.interval = 1.0 / 18.0
-        } else {
-            tracker.interval = Config.handTrackingInterval
-        }
     }
 
-    func toggleOcclusion() {
-        occlusionEnabled.toggle()
-        applyModeVisibility()
-    }
+    // MARK: - Monitor de la PC
 
-    /// Toma la orientación actual como "adelante" y trae el menú delante tuyo.
-    func recenterView() {
-        switch cameraMode {
-        case .ultraWide:
-            wideView.recenter()
-            placeMenuFront(transform: matrix_identity_float4x4)
-        case .arkit:
-            placeMenuFront(transform: lastPose?.transform ?? matrix_identity_float4x4)
-        }
-    }
-
-    /// Enciende o apaga el ambiente 360 (video de tormenta).
-    func toggleEnvironment() {
-        if let sky = sceneView.scene.rootNode.childNode(withName: "skyboxVideo", recursively: false) {
-            sky.removeFromParentNode()
-        } else if let url = Bundle.main.url(forResource: "stormy-ocean", withExtension: "mp4") {
-            sceneView.scene.rootNode.addChildNode(SkyboxVideoNode(url: url))
-        }
-    }
-
-    /// Palma abierta: abre el menú si está cerrado, lo cierra si está abierto.
-    func toggleMenuWithPalm() {
-        if let menu = menuWindow, hostViewsContains(menu) {
-            hostView.remove(menu)
-            menuWindow = nil
-        } else {
-            summonMenu()
-        }
-    }
-
-    private func hostViewsContains(_ window: SpatialWindow) -> Bool {
-        hostView.windows.contains(where: { $0 === window })
-    }
-
-    /// Doble pinza al aire: trae el menú delante de la cámara.
-    func summonMenu() {
-        ensureMenu()
-        placeMenuFront(transform: lastPose?.transform ?? matrix_identity_float4x4)
-    }
-
-    /// Alterna el menú entre **anclado al mundo** y **pegado a la cara**.
-    func togglePinnedMenu() {
-        guard let menu = menuWindow else { return }
-        if !menu.pinned, let pose = lastPose, let projection = pose.project(menu.position) {
-            menu.pinnedDistance = projection.depth
-        }
-        menu.pinned.toggle()
-        if let pose = lastPose {
-            hostView.layout(pose: pose)
-        }
-    }
-
-    // MARK: - Menú flotante
-
-    private func saveMenuPosition(_ position: simd_float3) {
-        let defaults = UserDefaults.standard
-        defaults.set(Double(position.x), forKey: "mixr.menuX")
-        defaults.set(Double(position.y), forKey: "mixr.menuY")
-        defaults.set(Double(position.z), forKey: "mixr.menuZ")
-    }
-
-    private func loadMenuPosition() -> simd_float3? {
-        let defaults = UserDefaults.standard
-        guard defaults.object(forKey: "mixr.menuX") != nil else { return nil }
-        return simd_float3(Float(defaults.double(forKey: "mixr.menuX")),
-                           Float(defaults.double(forKey: "mixr.menuY")),
-                           Float(defaults.double(forKey: "mixr.menuZ")))
-    }
-
-    private func ensureMenu() {
-        if let existing = menuWindow, hostView.windows.contains(where: { $0 === existing }) {
+    /// Abre el monitor (y el servidor que espera el video del PC).
+    func connectPC() {
+        if let monitor, hostView.windows.contains(where: { $0 === monitor }) {
+            hostView.bringToFront(monitor)
+            status = "Esperando al PC en \(localAddress):\(Config.streamPort)"
             return
         }
-        // Se crea delante de la cámara (el origen del mundo se resetea al
-        // arrancar) y desde ahí queda clavado: no vuelve a aparecer delante tuyo.
-        let position = positionInFrontOfCamera(index: 0, distance: Config.menuDistance)
-        saveMenuPosition(position)
-        let window = hostView.add(kind: .menu, position: position, physicalWidth: Config.menuWidth)
-        menuWindow = window
-        reanchor(window)
 
-        (window.view.content as? MenuContentView)?.onAction = { [weak self] action in
-            self?.handleMenu(action)
-        }
+        let window = hostView.add(kind: .pcStream(port: Config.streamPort),
+                                  position: positionInFront(distance: 1.6),
+                                  physicalWidth: 0.85)
+        monitor = window
+        hasMonitor = true
+        // Un monitor grande: más ancho que el panel por defecto.
+        window.pinnedDistance = 1.6
+        status = "Esperando al PC en \(localAddress):\(Config.streamPort)"
     }
 
-    private func placeMenuFront(transform: simd_float4x4) {
-        guard let menu = menuWindow else {
-            ensureMenu()
-            return
-        }
-        let position = positionInFrontOfCamera(index: 0,
-                                               distance: Config.menuDistance,
-                                               transform: transform)
-        hostView.setPosition(menu, position, force: true)
-        hostView.bringToFront(menu)
-        reanchor(menu)
-        saveMenuPosition(position)
+    func closeWindows() {
+        hostView.removeAll()
+        monitor = nil
+        hasMonitor = false
+        status = "Monitor cerrado"
     }
 
-    private func handleMenu(_ action: MenuAction) {
-        switch action {
-        case .pc: addPCWindow()
-        case .youtube: addWebWindow(url: Config.youtubeURL)
-        case .video: addVideoWindow(url: Config.sampleVideoURL)
-        case .photos: pickVideo()
-        case .web: addWebWindow(url: Config.defaultWebURL)
-        case .control: toggleControlMode()
-        case .hands: toggleHands()
-        case .occlusion: toggleOcclusion()
-        case .stereo: stereoEnabled.toggle()
-        case .dreamspace: toggleEnvironment()
-        case .wide: toggleWide()
-        case .recenter: recenterView()
-        case .clear: closeAllWindows()
-        }
+    func toggleMouse() {
+        mouseEnabled.toggle()
+        pointer.setEnabled(mouseEnabled)
+        gestures.reset()
+        status = mouseEnabled ? "Mouse del PC activo" : "Mouse del PC apagado"
     }
+
+    /// La IP del PC llegó por el stream: conectamos el mouse virtual.
+    func pcConnected(host: String) {
+        input.connect(host: host)
+        status = "PC conectado (\(host))"
+    }
+
+    /// El teclado/enlaces no se usan en esta versión, pero la ventana base los
+    /// declara: se deja vacío para que compile y no moleste.
+    func promptForURL(title: String, message: String, current: URL?, completion: @escaping (URL) -> Void) {}
 
     // MARK: - Frames
 
@@ -573,619 +141,71 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         let viewport = containerView.bounds.size
         guard viewport.width > 1, viewport.height > 1 else { return }
 
+        overlay.render(poses: lastHands)
+
+        guard let buffer = wideView.latestPixelBuffer else { return }
+
         let orientation = ScreenOrientation.current
-        var pose: CameraPose?
-        var buffer: CVPixelBuffer?
-
-        switch cameraMode {
-        case .arkit:
-            if let frame = arSession.currentFrame {
-                frameCount += 1
-                let now = CACurrentMediaTime()
-
-                let delta = frame.timestamp - lastFrameTime
-                if delta > 0.001, delta < 1 {
-                    let instant = 1 / delta
-                    smoothedFPS = smoothedFPS < 1 ? instant : smoothedFPS * 0.9 + instant * 0.1
-                }
-                lastFrameTime = frame.timestamp
-
-                // Cámara normal de ARKit: 6DoF siempre.
-                cameraSampleView.isHidden = true
-                sceneView.isHidden = Self.useRealityKit
-                realityView?.isHidden = !Self.useRealityKit
-
-                let imageSize = CGSize(width: CVPixelBufferGetWidth(frame.capturedImage),
-                                       height: CVPixelBufferGetHeight(frame.capturedImage))
-                pose = CameraPose(arkitCamera: frame.camera,
-                                  orientation: orientation,
-                                  viewport: viewport,
-                                  imageSize: imageSize)
-                buffer = frame.capturedImage
-
-                updateDebug(frame: frame, usingUltraWide: false)
-
-                // 6DoF: si el tracking está limitado, las ventanas se mueven con
-                // más calma (que queden "duras" y no temblando).
-                if case .normal = frame.camera.trackingState {
-                    // todo bien
-                } else {
-                    pose?.trackingLimited = true
-                }
-
-                // Anclajes: las ventanas quedan clavadas en el mundo real.
-                syncAnchors(dragging: gestures.isDragging || gamepadMoving)
-            }
-
-        case .ultraWide:
-            buffer = wideView.latestPixelBuffer
-            pose = wideView.currentPose(viewport: viewport, orientation: orientation)
-        }
-
-        guard let pose else { return }
+        let pose = wideView.currentPose(viewport: viewport, orientation: orientation)
         lastPose = pose
 
-        // Mando Bluetooth: el joystick mueve el menú (en el plano de la cámara).
+        hostView.layout(pose: pose)
         updateGamepad(pose: pose)
 
-        // El fondo 360 acompaña a la cámara (no se puede rodear).
-        if let sky = sceneView.scene.rootNode.childNode(withName: "skyboxVideo", recursively: false) as? SkyboxVideoNode {
-            sky.follow(simd_float3(pose.transform.columns.3.x,
-                                    pose.transform.columns.3.y,
-                                    pose.transform.columns.3.z))
-        }
-
-        // El proyector sale del renderer del fondo: mismas matemáticas que la
-        // imagen de la cámara, así la ventana no puede "nadar" al moverte.
-        if Self.useSceneKitProjector, cameraMode == .arkit, arSession.currentFrame != nil {
-            let cameraTransform = pose.transform
-            let rightColumn = cameraTransform.columns.0
-            let right = simd_float3(rightColumn.x, rightColumn.y, rightColumn.z)
-
-            hostView.worldToScreen = { [weak self] world in
-                guard let self else { return WindowHostView.WorldProjection(center: .zero, pointsPerMeter: 0) }
-                let scene = self.sceneView
-                let point = scene.projectPoint(SCNVector3(x: Float(world.x),
-                                                          y: Float(world.y),
-                                                          z: Float(world.z)))
-                guard point.x.isFinite, point.y.isFinite else {
-                    return WindowHostView.WorldProjection(center: .zero, pointsPerMeter: 0)
-                }
-
-                let meter = world + right
-                let offset = scene.projectPoint(SCNVector3(x: Float(meter.x),
-                                                           y: Float(meter.y),
-                                                           z: Float(meter.z)))
-                let pointsPerMeter = hypot(CGFloat(offset.x - point.x),
-                                           CGFloat(offset.y - point.y))
-                guard pointsPerMeter.isFinite, pointsPerMeter > 0.1 else {
-                    return WindowHostView.WorldProjection(center: .zero, pointsPerMeter: 0)
-                }
-
-                return WindowHostView.WorldProjection(center: CGPoint(x: CGFloat(point.x),
-                                                                      y: CGFloat(point.y)),
-                                                      pointsPerMeter: pointsPerMeter)
-            }
-        } else {
-            hostView.worldToScreen = nil
-        }
-
-        hostView.layout(pose: pose)
-
-        if stereoEnabled {
-            updateStereoPanes(pose: pose, buffer: buffer)
-        }
-
-        // El menú se crea recién cuando ya hay una pose real de ARKit, así su
-        // posición queda en el mundo y no en el origen "provisional".
-        if menuWindow == nil {
-            ensureMenu()
-        }
-
-        if occlusionEnabled, let buffer {
-            occlusionView.update(buffer: buffer, hands: lastHands, orientation: orientation)
-        }
-
-        guard handsVisible, let buffer else { return }
         tracker.submit(pixelBuffer: buffer,
                        viewportSize: viewport,
                        imageAspect: pose.imageAspect,
                        orientation: ScreenOrientation.visionOrientation(for: orientation)) { [weak self] poses in
-            DispatchQueue.main.async { self?.apply(poses) }
+            DispatchQueue.main.async { self?.apply(poses, pose: pose) }
         }
     }
 
-    /// Solo aceptamos buffers con tamaño y formato razonables.
-    private static func isUsable(_ buffer: CVPixelBuffer) -> Bool {
-        let width = CVPixelBufferGetWidth(buffer)
-        let height = CVPixelBufferGetHeight(buffer)
-        return width >= 320 && height >= 240 && CVPixelBufferGetPixelFormatType(buffer) != 0
-    }
-
-    private func updateDebug(frame: ARFrame, usingUltraWide: Bool) {
-        let now = CACurrentMediaTime()
-        guard now - lastDebugAt > 0.25 else { return }
-        lastDebugAt = now
-
-        let tracking: String
-        switch frame.camera.trackingState {
-        case .normal: tracking = "OK"
-        case .notAvailable: tracking = "SIN TRACKING"
-        case .limited(let reason): tracking = "LIMITADO(\(reason))"
-        }
-
-        let camera = frame.camera.transform.columns.3
-        let menu = menuWindow?.position ?? simd_float3.zero
-        let screen = lastPose?.project(menu)?.center ?? .zero
-        let text = String(format: "%@ %@ %dfps  c %.2f,%.2f  m %.2f,%.2f  s %.0f,%.0f",
-                          usingUltraWide ? "0.5x" : "1x",
-                          tracking,
-                          Int(smoothedFPS),
-                          Double(camera.x), Double(camera.z),
-                          Double(menu.x), Double(menu.z),
-                          Double(screen.x), Double(screen.y))
-        debugText = text
-    }
-
-    /// Pasa los puntos de la mano al espacio de un host (en VR las mitades
-    /// están escaladas y centradas, así que hay que convertir).
-    private func convertedPoses(_ poses: [HandPose], to host: UIView) -> [HandPose] {
-        poses.map { pose in
-            var joints: [VNHumanHandPoseObservation.JointName: CGPoint] = [:]
-            for (name, point) in pose.joints {
-                joints[name] = host.convert(point, from: containerView)
-            }
-            return HandPose(key: pose.key,
-                            joints: joints,
-                            pinchPoint: host.convert(pose.pinchPoint, from: containerView),
-                            pinch: pose.pinch,
-                            openPalm: pose.openPalm,
-                            closedFist: pose.closedFist,
-                            palmCenter: host.convert(pose.palmCenter, from: containerView),
-                            confidence: pose.confidence)
-        }
-    }
-    /// Elige la mitad (ojo) sobre la que está la mano. Mientras se arrastra se
-    /// mantiene la misma, porque la ventana agarrada vive en esa mitad.
-    private func vrPane(for poses: [HandPose]) -> StereoPane {
-        if gestures.isDragging, let current = vrTargetPane { return current }
-
-        guard let tip = poses.first.map({ $0.joints[.indexTip] ?? $0.pinchPoint }),
-              containerView.bounds.width > 1 else {
-            return vrTargetPane ?? leftPane
-        }
-        let pane = tip.x < containerView.bounds.midX ? leftPane : rightPane
-        vrTargetPane = pane
-        return pane
-    }
-
-    private func apply(_ poses: [HandPose]) {
+    private func apply(_ poses: [HandPose], pose: CameraPose) {
         lastHands = poses
-        overlay.render(poses: poses)
         if handCount != poses.count { handCount = poses.count }
 
-        hostView.allowsPositionWrites = gestures.isDragging
-        // Las copias de VR aceptan escritura: el arrastre ocurre ahí y después
-        // se devuelve la posición al mundo.
-        leftPane.host.allowsPositionWrites = true
-        rightPane.host.allowsPositionWrites = true
+        hostView.allowsPositionWrites = true
 
-        if controlMode {
-            // Si el dedo está sobre el menú, el gesto es del menú y no del PC.
-            if let tip = poses.first.map({ $0.joints[.indexTip] ?? $0.pinchPoint }),
-               let target = hostView.window(at: tip),
-               target.pressAt != nil {
-                overlay.setPointer(nil)
-                gestures.update(poses: poses, host: hostView, handDepth: nil)
-                return
-            }
-            // La mano es el mouse del PC: no se tocan las ventanas.
-            overlay.setPointer(pointer.update(poses: poses, viewport: overlay.bounds.size))
-        } else {
-            // Cerca de una ventana: rayito desde el dedo con punto en la punta.
-            if let tip = poses.first.map({ $0.joints[.indexTip] ?? $0.pinchPoint }),
-               hostView.window(near: tip) != nil {
-                overlay.setPointer(tip)
-            } else {
-                overlay.setPointer(nil)
-            }
-            // En VR cada ojo ve una mitad: la mano actúa sobre la mitad donde
-            // está. Las dos mitades muestran la misma escena, escalada, así que
-            // hay que llevar los puntos de la mano a su espacio.
-            let targetHost: WindowHostView
-            let localPoses: [HandPose]
-            if stereoEnabled {
-                let pane = vrPane(for: poses)
-                targetHost = pane.host
-                localPoses = convertedPoses(poses, to: targetHost)
-            } else {
-                targetHost = hostView
-                localPoses = poses
-            }
-
-            // El rayito se ve en las dos mitades, pero sólo al apuntar a algo.
-            if stereoEnabled {
-                if let tip = localPoses.first.map({ $0.joints[.indexTip] ?? $0.pinchPoint }),
-                   targetHost.window(near: tip) != nil {
-                    leftPane.overlay.setPointer(tip)
-                    rightPane.overlay.setPointer(tip)
-                } else {
-                    leftPane.overlay.setPointer(nil)
-                    rightPane.overlay.setPointer(nil)
-                }
-            }
-
-            gestures.update(poses: localPoses, host: targetHost, handDepth: nil)
-
-            // El arrastre ocurre en la copia de la mitad: se devuelve al mundo.
-            if stereoEnabled, let dragged = gestures.grabbedWindow,
-               let index = targetHost.windows.firstIndex(where: { $0 === dragged }),
-               index < hostView.windows.count {
-                hostView.windows[index].position = dragged.position
-                hostView.windows[index].physicalWidth = dragged.physicalWidth
-            }
-        }
-    }
-
-    // MARK: - Ventanas
-
-    func addVideoWindow(url: URL?) {
-        add(kind: .video(url), width: Config.windowWidth, distance: Config.windowDistance)
-    }
-
-    func addWebWindow(url: URL) {
-        add(kind: .web(url), width: Config.windowWidth, distance: Config.windowDistance)
-    }
-
-    /// Abre la ventana de la pantalla del PC (y empieza a escuchar el stream).
-    func addPCWindow(port: UInt16 = Config.streamPort) {
-        add(kind: .pcStream(port: port), width: Config.streamWidth, distance: Config.streamDistance)
-    }
-
-    private func add(kind: WindowKind, width: CGFloat, distance: Float) {
-        let position = positionInFrontOfCamera(index: hostView.windows.count, distance: distance)
-        let window = hostView.add(kind: kind, position: position, physicalWidth: width)
-        reanchor(window)
-
-        if stereoEnabled {
-            addMirrorWindow(kind: kind, position: position, width: width)
-        }
-    }
-
-    // MARK: - Anclajes del mundo (6DoF, sin LiDAR)
-
-    /// Crea el ancla de una ventana si todavía no tiene.
-    @discardableResult
-    private func anchor(for window: SpatialWindow) -> ARAnchor {
-        if let anchor = window.anchor { return anchor }
-        var matrix = matrix_identity_float4x4
-        let position = window.position
-        matrix.columns.3 = simd_float4(position.x, position.y, position.z, 1)
-        let anchor = ARAnchor(transform: matrix)
-        window.anchor = anchor
-        arSession.add(anchor: anchor)
-        return anchor
-    }
-
-    /// Vuelve a clavar la ventana en el mundo, en el punto donde está ahora.
-    /// Se llama al soltarla: desde ese instante no se mueve más.
-    func reanchor(_ window: SpatialWindow) {
-        guard cameraMode == .arkit else { return }
-        if let old = window.anchor {
-            arSession.remove(anchor: old)
-            window.anchor = nil
-        }
-        anchor(for: window)
-    }
-
-    // MARK: - Mando Bluetooth
-
-    /// El stick mueve el menú en el plano de la cámara (6DoF), a velocidad
-    /// constante. Al soltarlo, se re-ancla donde quedó.
-    private func updateGamepad(pose: CameraPose) {
-        let now = CACurrentMediaTime()
-        let dt = lastTickAt == 0 ? 0.016 : min(0.1, now - lastTickAt)
-        lastTickAt = now
-
-        let axes = gamepad.axes
-        guard let menu = menuWindow,
-              abs(axes.x) > 0.01 || abs(axes.y) > 0.01 else {
-            gamepadMoving = false
+        if mouseEnabled {
+            overlay.setPointer(pointer.update(poses: poses, viewport: containerView.bounds.size))
             return
         }
 
-        let speed: CGFloat = 1.1      // metros por segundo
+        gestures.update(poses: poses, host: hostView, pose: pose)
+
+        // Rayito sólo cuando la mano está sobre el monitor.
+        if let tip = poses.first.map({ $0.pinchPoint }),
+           hostView.window(near: tip) != nil {
+            overlay.setPointer(tip)
+        } else {
+            overlay.setPointer(nil)
+        }
+    }
+
+    // MARK: - Mando Bluetooth (opcional)
+
+    private func updateGamepad(pose: CameraPose) {
+        let axes = gamepad.axes
+        guard let monitor,
+              abs(axes.x) > 0.01 || abs(axes.y) > 0.01 else { return }
+
+        let step = 1.0 / 60.0
+        let speed: CGFloat = 1.0
         let right = pose.transform.columns.0
         let up = pose.transform.columns.1
-        let delta = simd_float3(right.x, right.y, right.z) * Float(axes.x * speed * CGFloat(dt))
-            + simd_float3(up.x, up.y, up.z) * Float(axes.y * speed * CGFloat(dt))
+        let delta = simd_float3(right.x, right.y, right.z) * Float(axes.x * speed * step)
+            + simd_float3(up.x, up.y, up.z) * Float(axes.y * speed * step)
 
-        hostView.setPosition(menu, menu.position + delta, force: true)
-        gamepadMoving = true
+        hostView.setPosition(monitor, monitor.position + delta, force: true)
     }
 
-    /// ARKit puede corregir el origen del mundo al re-localizar. El ancla manda:
-    /// así la ventana sigue clavada en el lugar real aunque el tracking falle.
-    private func syncAnchors(dragging: Bool) {
-        // Al soltar, el ancla se muda a donde quedó la ventana.
-        if wasDragging, !dragging {
-            for window in hostView.windows { reanchor(window) }
-        }
-        wasDragging = dragging
-        guard !dragging else { return }
+    // MARK: - Utilidades
 
-        for window in hostView.windows {
-            let anchor = anchor(for: window)
-            let column = anchor.transform.columns.3
-            let target = simd_float3(column.x, column.y, column.z)
-            if simd_distance(target, window.position) > 0.004 {
-                window.position = target
-            }
-        }
-    }
-
-    // MARK: - Modo VR (dos pantallas)
-
-    private func applyStereoMode() {
-        stereoRoot.isHidden = !stereoEnabled
-
-        // Al cambiar de modo, la ventana agarrada pertenece al otro host.
-        gestures.reset()
-        vrTargetPane = nil
-
-        let monoViews: [UIView] = [cameraSampleView, sceneView, wideView, hostView, occlusionView, overlay]
-        for monoView in monoViews {
-            monoView.isHidden = stereoEnabled
-        }
-        // La vista de RealityKit no está en `monoViews` (puede no existir).
-        realityView?.isHidden = stereoEnabled || !Self.useRealityKit
-
-        if stereoEnabled {
-            buildMirrorWindows()
-        } else {
-            rightPane.host.removeAll()
-            leftPane.overlay.render(poses: [])
-            rightPane.overlay.render(poses: [])
-            applyModeVisibility()
-        }
-    }
-
-    private func buildMirrorWindows() {
-        leftPane.host.removeAll()
-        rightPane.host.removeAll()
-        for window in hostView.windows {
-            addMirrorWindow(kind: window.kind, position: window.position, width: window.physicalWidth)
-        }
-    }
-
-    private func addMirrorWindow(kind: WindowKind, position: simd_float3, width: CGFloat) {
-        for pane in [leftPane, rightPane] {
-            let mirror = pane.host.add(kind: kind, position: position, physicalWidth: width)
-            (mirror.view.content as? MenuContentView)?.onAction = { [weak self] action in
-                self?.handleMenu(action)
-            }
-        }
-    }
-
-    /// Copia posición/tamaño de las ventanas reales a las de cada ojo.
-    private func syncMirrorWindows() {
-        let sources = hostView.windows
-        for pane in [leftPane, rightPane] {
-            guard pane.host.windows.count == sources.count else {
-                buildMirrorWindows()
-                return
-            }
-            for (source, mirror) in zip(sources, pane.host.windows) {
-                mirror.position = source.position
-                mirror.physicalWidth = source.physicalWidth
-                mirror.pinned = source.pinned
-                mirror.view.isHidden = source.view.isHidden
-            }
-        }
-    }
-
-    /// Dibuja la escena en las dos mitades (una por ojo).
-    private func updateStereoPanes(pose: CameraPose, buffer: CVPixelBuffer?) {
-        let size = containerView.bounds.size
-        guard size.width > 1 else { return }
-
-        let half = CGSize(width: size.width / 2, height: size.height)
-        leftPane.frame = CGRect(origin: .zero, size: half)
-        rightPane.frame = CGRect(x: half.width, y: 0, width: half.width, height: half.height)
-
-        leftPane.layoutScene(containerSize: size, scale: vrScale,
-                             eyeShift: -vrSeparation / 2, verticalOffset: vrVertical)
-        rightPane.layoutScene(containerSize: size, scale: vrScale,
-                              eyeShift: vrSeparation / 2, verticalOffset: vrVertical)
-
-        if let buffer {
-            leftPane.background.enqueue(buffer)
-            rightPane.background.enqueue(buffer)
-        }
-
-        syncMirrorWindows()
-        leftPane.host.layout(pose: pose)
-        rightPane.host.layout(pose: pose)
-        leftPane.render(poses: lastHands)
-        rightPane.render(poses: lastHands)
-    }
-
-    func closeAllWindows() {
-        for window in hostView.windows where window !== menuWindow {
-            if let anchor = window.anchor {
-                arSession.remove(anchor: anchor)
-                window.anchor = nil
-            }
-        }
-        hostView.removeAll(except: menuWindow)
-    }
-
-    func toggleHands() {
-        handsVisible.toggle()
-        overlay.isHidden = !handsVisible
-        if !handsVisible {
-            overlay.render(poses: [])
-            overlay.setPointer(nil)
-            gestures.reset()
-            lastHands = []
-            occlusionView.clear()
-            handCount = 0
-        }
-    }
-
-    /// Posición nueva delante de la cámara, escalonada para que no se tapen.
-    private func positionInFrontOfCamera(index: Int,
-                                         distance: Float,
-                                         transform override: simd_float4x4? = nil) -> simd_float3 {
-        let transform = override
-            ?? lastPose?.transform
-            ?? arSession.currentFrame?.camera.transform
-            ?? matrix_identity_float4x4
-
-        let right = simd_float3(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
-        let up = simd_float3(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
-        let back = simd_float3(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
-        let origin = simd_float3(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
-
-        let column = Float(index % 2) * 0.68 - 0.34
-        let row = Float((index / 2) % 3) * 0.4
-
-        return origin + right * column + up * (row - 0.10) - back * distance
-    }
-
-    // MARK: - Modo control (mano = mouse del PC)
-
-    func toggleControlMode() {
-        controlMode.toggle()
-        pointer.setEnabled(controlMode)
-        gestures.reset()
-        overlay.setPointer(nil)
-
-        hostView.allowsPositionWrites = gestures.isDragging
-
-        if controlMode {
-            if let host = pcHost {
-                pointer.client.connect(host: host)
-            } else {
-                requestPCHost()
-            }
-        }
-    }
-
-    /// El stream avisa desde qué IP viene el PC: con eso alcanza para el mouse.
-    func pcConnected(host: String) {
-        pcHost = host
-        pointer.client.connect(host: host)
-    }
-
-    private func requestPCHost() {
-        promptForText(title: "IP del PC",
-                      message: "IP de tu PC en la misma Wi-Fi. En el PC corré pc_input.py (escucha en UDP \(Config.inputPort)).",
-                      placeholder: "192.168.0.10",
-                      current: pcHost) { [weak self] text in
-            guard let self, let host = Self.normalizeHost(text) else { return }
-            self.pcConnected(host: host)
-        }
-    }
-
-    static func normalizeHost(_ text: String) -> String? {
-        var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        value = value.replacingOccurrences(of: "udp://", with: "")
-        if let colon = value.firstIndex(of: ":") {
-            value = String(value[value.startIndex..<colon])
-        }
-        return value.isEmpty ? nil : value
-    }
-
-    // MARK: - Elegir video de la galería
-
-    func pickVideo() {
-        var configuration = PHPickerConfiguration()
-        configuration.filter = .videos
-        configuration.selectionLimit = 1
-        configuration.preferredAssetRepresentationMode = .current
-
-        let picker = PHPickerViewController(configuration: configuration)
-        picker.delegate = self
-        topViewController()?.present(picker, animated: true)
-    }
-
-    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-        picker.dismiss(animated: true)
-
-        guard let provider = results.first?.itemProvider,
-              provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) else { return }
-
-        provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { [weak self] url, _ in
-            guard let url else { return }
-            // El archivo temporal desaparece al salir del closure: hay que copiarlo.
-            let name = UUID().uuidString + "." + (url.pathExtension.isEmpty ? "mov" : url.pathExtension)
-            let destination = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-            try? FileManager.default.removeItem(at: destination)
-            guard (try? FileManager.default.copyItem(at: url, to: destination)) != nil else { return }
-            DispatchQueue.main.async { self?.addVideoWindow(url: destination) }
-        }
-    }
-
-    // MARK: - Diálogo de URL
-
-    func openURLPrompt() {
-        promptForURL(title: "Abrir ventana", message: "URL de una página web o de un video (HLS/MP4).",
-                     current: Config.defaultWebURL) { [weak self] url in
-            guard let self else { return }
-            if url.pathExtension.lowercased() == "m3u8" || url.pathExtension.lowercased() == "mp4" {
-                self.addVideoWindow(url: url)
-            } else {
-                self.addWebWindow(url: url)
-            }
-        }
-    }
-
-    func promptForURL(title: String, message: String, current: URL?, onAccept: @escaping (URL) -> Void) {
-        promptForText(title: title, message: message, placeholder: "https://…",
-                      current: current?.absoluteString) { text in
-            guard let url = Self.normalize(text) else { return }
-            onAccept(url)
-        }
-    }
-
-    func promptForText(title: String, message: String, placeholder: String,
-                       current: String?, onAccept: @escaping (String) -> Void) {
-        guard let presenter = topViewController() else { return }
-
-        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addTextField { field in
-            field.text = current
-            field.placeholder = placeholder
-            field.keyboardType = .URL
-            field.autocapitalizationType = .none
-            field.autocorrectionType = .no
-            field.clearButtonMode = .whileEditing
-        }
-        alert.addAction(UIAlertAction(title: "Cancelar", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Aceptar", style: .default) { _ in
-            guard let text = alert.textFields?.first?.text else { return }
-            onAccept(text)
-        })
-        presenter.present(alert, animated: true)
-    }
-
-    static func normalize(_ text: String) -> URL? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if let url = URL(string: trimmed), url.scheme != nil, url.host != nil { return url }
-        if trimmed.hasPrefix("/") || trimmed.hasPrefix("file:") {
-            return URL(fileURLWithPath: trimmed.replacingOccurrences(of: "file://", with: ""))
-        }
-        return URL(string: "https://" + trimmed)
-    }
-
-    private func topViewController() -> UIViewController? {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let windows = scenes.flatMap { $0.windows }
-        guard let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first else { return nil }
-        var controller = window.rootViewController
-        while let presented = controller?.presentedViewController { controller = presented }
-        return controller
+    private func positionInFront(distance: Float) -> simd_float3 {
+        guard let pose = lastPose else { return simd_float3(0, 0, -distance) }
+        let columns = pose.transform.columns
+        let forward = simd_float3(-columns.2.x, -columns.2.y, -columns.2.z)
+        let position = simd_float3(columns.3.x, columns.3.y, columns.3.z)
+        return position + forward * distance
     }
 }

@@ -1,111 +1,79 @@
 import SwiftUI
 
-/// HUD mínimo: la app se maneja con el menú flotante y las manos.
-/// En modo VR el HUD se esconde: cada ojo ve solo su marco.
+/// Pantalla principal: la cámara 0.5x con el monitor encima y un menú táctil.
+///
+/// No hay tiles ni apps: sólo conectar la PC, el mouse y cerrar.
 struct RootView: View {
     @ObservedObject var session: XRSession
 
     var body: some View {
-        if session.showsSetup {
-            SetupView(session: session)
-        } else {
-            cameraScene
-        }
-    }
-
-    private var cameraScene: some View {
-        ZStack(alignment: .bottom) {
+        ZStack(alignment: .topLeading) {
             XRCameraView(session: session)
                 .ignoresSafeArea()
 
-            if !session.stereoEnabled {
-                VStack(spacing: 0) {
-                    HStack(spacing: 7) {
-                        chip("\(session.handCount)",
-                             color: session.handCount > 0 ? .green : .orange,
-                             symbol: "hand.raised.fill")
-
-                        chip(session.cameraMode.label, color: .cyan, symbol: "camera.viewfinder")
-
-                        if session.controlMode {
-                            chip("Mouse PC", color: .green, symbol: "cursorarrow")
-                        }
-
-                        Spacer(minLength: 0)
-                    }
-
-                    Spacer(minLength: 0)
-
-                    HStack {
-                        Spacer(minLength: 0)
-                        Text(session.debugText)
-                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.85))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(Color.black.opacity(0.55)))
-                    }
-                    .padding(.bottom, 4)
-
-                    Text(hintText)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(session.controlMode ? .green : .white.opacity(0.55))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 5)
-                        .background(Capsule().fill(Color.black.opacity(0.35)))
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-            }
-
-            if let message = session.unsupportedMessage {
-                unsupported(message)
-            }
+            panel
         }
         .background(Color.black)
+        .onAppear { session.start() }
         .onDisappear { session.pause() }
     }
 
-    private func chip(_ text: String, color: Color, symbol: String) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: symbol)
-                .font(.system(size: 9, weight: .bold))
-            Text(text)
-                .font(.system(size: 11, weight: .semibold))
-        }
-        .foregroundColor(color)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Capsule().fill(Color.black.opacity(0.45)))
-    }
+    private var panel: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                action("Monitor PC", symbol: "display", filled: true) {
+                    session.connectPC()
+                }
+                action(session.mouseEnabled ? "Mouse ON" : "Mouse",
+                       symbol: "cursorarrow",
+                       filled: session.mouseEnabled) {
+                    session.toggleMouse()
+                }
+                action("Cerrar", symbol: "xmark", filled: false) {
+                    session.closeWindows()
+                }
+            }
 
-    private var hintText: String {
-        if session.controlMode {
-            return "El índice mueve el cursor del PC · pinza = clic · apuntá al menú para salir"
-        }
-        return "Puño en la barra del costado = mover · empujá la mano = alejar · palma = menú"
-    }
+            Text("IP iPhone: \(session.localAddress) · puerto 47295")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(.cyan)
 
-    private func unsupported(_ message: String) -> some View {
-        VStack(spacing: 10) {
-            Image(systemName: "video.slash")
-                .font(.system(size: 26))
-            Text("No se pudo abrir la cámara")
-                .font(.system(size: 15, weight: .semibold))
-            Text(message)
-                .font(.system(size: 12))
-                .multilineTextAlignment(.center)
-                .foregroundColor(.white.opacity(0.7))
+            Text(session.status)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.75))
+
+            Text("Manos \(session.handCount) · pinza en el borde = mover · dos pinzas = tamaño")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.white.opacity(0.55))
         }
-        .foregroundColor(.white)
-        .padding(22)
+        .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.black.opacity(0.85))
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.black.opacity(0.55))
         )
-        .padding(30)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+        .padding(14)
+    }
+
+    private func action(_ title: String,
+                        symbol: String,
+                        filled: Bool,
+                        run: @escaping () -> Void) -> some View {
+        Button(action: run) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol).font(.system(size: 12, weight: .bold))
+                Text(title).font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundColor(filled ? .black : .white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                Capsule().fill(filled ? Color.white : Color.white.opacity(0.16))
+            )
+        }
+        .buttonStyle(.plain)
     }
 }

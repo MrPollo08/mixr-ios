@@ -364,6 +364,17 @@ final class WindowHostView: UIView {
         return nil
     }
 
+    /// Ventana cuyo **borde** está cerca del punto: es donde se pellizca para
+    /// agarrar el monitor (el centro queda libre para el contenido).
+    func window(nearBorder point: CGPoint, margin: CGFloat = 54) -> SpatialWindow? {
+        for window in windows.reversed() where !window.view.isHidden {
+            let outer = window.view.frame.insetBy(dx: -margin, dy: -margin)
+            let inner = window.view.frame.insetBy(dx: margin, dy: margin)
+            if outer.contains(point), !inner.contains(point) { return window }
+        }
+        return nil
+    }
+
     /// Rectángulo de la barra de agarre de una ventana, en coordenadas del host
     /// (el panel está dibujado con `layer.transform`, así que se escala igual).
     func grabBarRect(for window: SpatialWindow, margin: CGFloat = 20) -> CGRect {
