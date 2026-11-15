@@ -21,6 +21,10 @@ final class StreamContentView: UIView {
 
     private var hasFirstFrame = false
 
+    /// Un solo servidor por puerto: los demás ojos reciben los mismos frames.
+    private static var primaries: [UInt16: StreamContentView] = [:]
+    private static var mirrors: [UInt16: NSHashTable<StreamContentView>] = [:]
+
     init(port: UInt16) {
         self.port = port
         self.server = StreamServer(port: port)
@@ -51,10 +55,25 @@ final class StreamContentView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window != nil {
-            server.start()
-        } else {
+        guard window != nil else {
+            if Self.primaries[port] === self {
+                Self.primaries[port] = nil
+                Self.mirrors[port] = nil
+            } else {
+                Self.mirrors[port]?.remove(self)
+            }
             server.stop()
+            return
+        }
+
+        if let primary = Self.primaries[port], primary !== self {
+            // Segundo ojo: no abre otro servidor, se cuelga del primero.
+            let table = Self.mirrors[port] ?? NSHashTable<StreamContentView>.weakObjects()
+            table.add(self)
+            Self.mirrors[port] = table
+        } else {
+            Self.primaries[port] = self
+            server.start()
         }
     }
 
@@ -149,6 +168,13 @@ final class StreamContentView: UIView {
         }
         if displayLayer.isReadyForMoreMediaData {
             displayLayer.enqueue(sample)
+        }
+
+        // Reparte el mismo frame al otro ojo (si estamos en modo VR).
+        if Self.primaries[port] === self, let table = Self.mirrors[port] {
+            for mirror in table.allObjects where mirror !== self {
+                mirror.enqueue(sample, videoSize: videoSize)
+            }
         }
     }
 }
