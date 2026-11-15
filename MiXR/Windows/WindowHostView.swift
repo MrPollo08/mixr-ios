@@ -16,7 +16,12 @@ final class WindowHostView: UIView {
     /// Proyector provisto por quien dibuja el fondo (SceneKit): devuelve el
     /// centro en pantalla y los puntos por metro de un punto del mundo.
     /// Usar el mismo motor que el fondo evita cualquier desincronización.
-    var worldToScreen: ((simd_float3) -> (center: CGPoint, pointsPerMeter: CGFloat)?)?
+    struct WorldProjection {
+        let center: CGPoint
+        let pointsPerMeter: CGFloat
+    }
+
+    var worldToScreen: ((simd_float3) -> WorldProjection?)?
 
     private var pinchStartWidth: CGFloat = 0
 

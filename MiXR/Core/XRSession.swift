@@ -435,7 +435,8 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                                            CGFloat(offset.y - point.y))
                 guard pointsPerMeter.isFinite, pointsPerMeter > 0.1 else { return nil }
 
-                return (CGPoint(x: CGFloat(point.x), y: CGFloat(point.y)), pointsPerMeter)
+                return WorldProjection(center: CGPoint(x: CGFloat(point.x), y: CGFloat(point.y)),
+                                       pointsPerMeter: pointsPerMeter)
             }
         } else {
             hostView.worldToScreen = nil
