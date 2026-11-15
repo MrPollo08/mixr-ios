@@ -32,7 +32,7 @@ final class WideCameraView: UIView {
 
         output.alwaysDiscardsLateVideoFrames = true
         output.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
         ]
         output.setSampleBufferDelegate(self, queue: captureQueue)
     }
@@ -177,7 +177,7 @@ final class WideCameraView: UIView {
             let aspect = CGFloat(dimensions.width) / CGFloat(dimensions.height)
             guard abs(aspect - 4.0 / 3.0) < 0.02 else { continue }
 
-            let score = abs(CGFloat(dimensions.width) - 1920)
+            let score = abs(CGFloat(dimensions.width) - 1280)
             if score < bestScore {
                 bestScore = score
                 best = format

@@ -51,6 +51,8 @@ final class HandTracker {
     private var lastPoses: [String: HandPose] = [:]
     private var lastSeen: [String: CFTimeInterval] = [:]
     private var lastProcessedAt: CFTimeInterval = 0
+    /// Cadencia de Vision. En 0.5x se baja para no comer FPS.
+    var interval: TimeInterval = Config.handTrackingInterval
     private var busy = false
 
     init() {
@@ -68,7 +70,7 @@ final class HandTracker {
             guard !self.busy else { return }
 
             let now = CACurrentMediaTime()
-            guard now - self.lastProcessedAt >= Config.handTrackingInterval else { return }
+            guard now - self.lastProcessedAt >= self.interval else { return }
             self.lastProcessedAt = now
             self.busy = true
 

@@ -126,6 +126,8 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
     /// Para re-anclar justo cuando se suelta una ventana.
     private var wasDragging = false
+    /// Cuánto se corrieron las ventanas al pasar a 0.5x (para volver).
+    private var wideRebaseOffset = simd_float3.zero
     /// Control con mando Bluetooth (el joystick mueve el menú).
     private let gamepad = GamepadController()
     /// El mando está moviendo el menú (para no re-anclarlo en el medio).
@@ -377,6 +379,46 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         setCameraMode(cameraMode == .ultraWide ? .arkit : .ultraWide)
     }
 
+    /// Tile "0.5x": pasa a la ultra gran angular (AVFoundation) o vuelve al
+    /// 6DoF de ARKit. En 0.5x no hay anclaje de traslación (iOS no deja usar
+    /// ARKit y otra cámara a la vez): las ventanas quedan fijas a la rotación.
+    func toggleWide() {
+        if cameraMode == .ultraWide {
+            restoreWindowsAfterWide()
+            setCameraMode(.arkit)
+            return
+        }
+        rebaseWindowsToCamera()
+        setCameraMode(.ultraWide)
+    }
+
+    /// Al entrar a 0.5x el origen del mundo pasa a ser la cámara actual: se
+    /// corren las ventanas para que queden en la misma dirección (si no, el
+    /// menú aparecía descentrado).
+    private func rebaseWindowsToCamera() {
+        guard let pose = lastPose else { return }
+        let column = pose.transform.columns.3
+        let offset = simd_float3(column.x, column.y, column.z)
+        guard simd_length(offset) > 0.001 else { return }
+
+        wideRebaseOffset = offset
+        for window in hostView.windows {
+            window.position -= offset
+            window.smoothedCenter = nil
+            window.anchor = nil
+        }
+    }
+
+    private func restoreWindowsAfterWide() {
+        guard simd_length(wideRebaseOffset) > 0.001 else { return }
+        let offset = wideRebaseOffset
+        wideRebaseOffset = .zero
+        for window in hostView.windows {
+            window.position += offset
+            window.smoothedCenter = nil
+        }
+    }
+
     func setCameraMode(_ mode: CameraMode) {
         guard mode != cameraMode else { return }
         let wasRunning = isRunning
@@ -391,6 +433,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         gestures.reset()
 
         if wasRunning { start() }
+        if mode == .ultraWide {
+            // La 0.5x no tiene 6DoF: se busca que "adelante" sea hacia donde
+            // mirás ahora, así las ventanas quedan en el mismo lugar.
+            wideView.recenter()
+            tracker.interval = 1.0 / 18.0
+        } else {
+            tracker.interval = Config.handTrackingInterval
+        }
     }
 
     func toggleOcclusion() {
@@ -510,6 +560,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         case .occlusion: toggleOcclusion()
         case .stereo: stereoEnabled.toggle()
         case .dreamspace: toggleEnvironment()
+        case .wide: toggleWide()
         case .recenter: recenterView()
         case .clear: closeAllWindows()
         }
