@@ -63,6 +63,8 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private let leftPane = StereoPane()
     private let rightPane = StereoPane()
     private let stereoRoot = UIView()
+    /// Mitad (ojo) sobre la que está actuando la mano en modo VR.
+    private var vrTargetPane: StereoPane?
 
     override init() {
         super.init()
@@ -713,12 +715,30 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                             confidence: pose.confidence)
         }
     }
+    /// Elige la mitad (ojo) sobre la que está la mano. Mientras se arrastra se
+    /// mantiene la misma, porque la ventana agarrada vive en esa mitad.
+    private func vrPane(for poses: [HandPose]) -> StereoPane {
+        if gestures.isDragging, let current = vrTargetPane { return current }
+
+        guard let tip = poses.first.map({ $0.joints[.indexTip] ?? $0.pinchPoint }),
+              containerView.bounds.width > 1 else {
+            return vrTargetPane ?? leftPane
+        }
+        let pane = tip.x < containerView.bounds.midX ? leftPane : rightPane
+        vrTargetPane = pane
+        return pane
+    }
+
     private func apply(_ poses: [HandPose]) {
         lastHands = poses
         overlay.render(poses: poses)
         if handCount != poses.count { handCount = poses.count }
 
         hostView.allowsPositionWrites = gestures.isDragging
+        // Las copias de VR aceptan escritura: el arrastre ocurre ahí y después
+        // se devuelve la posición al mundo.
+        leftPane.host.allowsPositionWrites = true
+        rightPane.host.allowsPositionWrites = true
 
         if controlMode {
             // Si el dedo está sobre el menú, el gesto es del menú y no del PC.
@@ -740,19 +760,37 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             } else {
                 overlay.setPointer(nil)
             }
-            // En VR la interacción va sobre la mitad izquierda (la visible).
-            let targetHost = stereoEnabled ? leftPane.host : hostView
-            let localPoses = stereoEnabled ? convertedPoses(poses, to: targetHost) : poses
+            // En VR cada ojo ve una mitad: la mano actúa sobre la mitad donde
+            // está. Las dos mitades muestran la misma escena, escalada, así que
+            // hay que llevar los puntos de la mano a su espacio.
+            let targetHost: WindowHostView
+            let localPoses: [HandPose]
             if stereoEnabled {
-                let flag = localPoses.first?.pinchPoint
-                leftPane.overlay.setPointer(flag)
-                rightPane.overlay.setPointer(flag)
+                let pane = vrPane(for: poses)
+                targetHost = pane.host
+                localPoses = convertedPoses(poses, to: targetHost)
+            } else {
+                targetHost = hostView
+                localPoses = poses
             }
+
+            // El rayito se ve en las dos mitades, pero sólo al apuntar a algo.
+            if stereoEnabled {
+                if let tip = localPoses.first.map({ $0.joints[.indexTip] ?? $0.pinchPoint }),
+                   targetHost.window(near: tip) != nil {
+                    leftPane.overlay.setPointer(tip)
+                    rightPane.overlay.setPointer(tip)
+                } else {
+                    leftPane.overlay.setPointer(nil)
+                    rightPane.overlay.setPointer(nil)
+                }
+            }
+
             gestures.update(poses: localPoses, host: targetHost, handDepth: handDepth)
 
-            // Devolver el arrastre de la mitad al modelo del mundo.
+            // El arrastre ocurre en la copia de la mitad: se devuelve al mundo.
             if stereoEnabled, let dragged = gestures.grabbedWindow,
-               let index = leftPane.host.windows.firstIndex(where: {  === dragged }),
+               let index = targetHost.windows.firstIndex(where: { $0 === dragged }),
                index < hostView.windows.count {
                 hostView.windows[index].position = dragged.position
                 hostView.windows[index].physicalWidth = dragged.physicalWidth
@@ -788,6 +826,10 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
     private func applyStereoMode() {
         stereoRoot.isHidden = !stereoEnabled
+
+        // Al cambiar de modo, la ventana agarrada pertenece al otro host.
+        gestures.reset()
+        vrTargetPane = nil
 
         let monoViews: [UIView] = [cameraSampleView, sceneView, wideView, hostView, occlusionView, overlay]
         for monoView in monoViews {
