@@ -49,6 +49,12 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
     @Published private(set) var cameraMode: CameraMode = XRSession.savedMode()
     @Published private(set) var occlusionEnabled = false
+    /// Modo VR: la escena se dibuja dos veces, una por ojo.
+    @Published private(set) var stereoEnabled = false
+
+    private let leftPane = StereoPane()
+    private let rightPane = StereoPane()
+    private let stereoRoot = UIView()
 
     private static let modeKey = "mixr.cameraMode"
 
@@ -119,6 +125,17 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             subview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             view.addSubview(subview)
         }
+
+        // Modo VR: dos mitades, una por ojo.
+        stereoRoot.frame = view.bounds
+        stereoRoot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        stereoRoot.backgroundColor = .black
+        stereoRoot.isHidden = true
+        view.addSubview(stereoRoot)
+        stereoRoot.addSubview(leftPane)
+        stereoRoot.addSubview(rightPane)
+        leftPane.host.session = self
+        rightPane.host.session = self
 
         cameraSampleView.isHidden = true
         sceneView.isUserInteractionEnabled = false
@@ -336,6 +353,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         case .hands: toggleHands()
         case .occlusion: toggleOcclusion()
         case .pin: togglePinnedMenu()
+        case .stereo: toggleStereo()
         case .recenter: recenterView()
         case .clear: closeAllWindows()
         }
@@ -449,6 +467,10 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
         hostView.layout(pose: pose)
 
+        if stereoEnabled {
+            updateStereoPanes(pose: pose, buffer: buffer)
+        }
+
         // El menú se crea recién cuando ya hay una pose real de ARKit, así su
         // posición queda en el mundo y no en el origen "provisional".
         if menuWindow == nil {
@@ -547,6 +569,89 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private func add(kind: WindowKind, width: CGFloat, distance: Float) {
         let position = positionInFrontOfCamera(index: hostView.windows.count, distance: distance)
         hostView.add(kind: kind, position: position, physicalWidth: width)
+
+        if stereoEnabled {
+            addMirrorWindow(kind: kind, position: position, width: width)
+        }
+    }
+
+    // MARK: - Modo VR (dos pantallas)
+
+    func toggleStereo() {
+        stereoEnabled.toggle()
+        stereoRoot.isHidden = !stereoEnabled
+
+        let monoViews: [UIView] = [cameraSampleView, sceneView, wideView, hostView, occlusionView, overlay]
+        for monoView in monoViews {
+            monoView.isHidden = stereoEnabled
+        }
+
+        if stereoEnabled {
+            buildMirrorWindows()
+        } else {
+            rightPane.host.removeAll()
+            leftPane.overlay.render(poses: [])
+            rightPane.overlay.render(poses: [])
+            applyModeVisibility()
+        }
+    }
+
+    private func buildMirrorWindows() {
+        leftPane.host.removeAll()
+        rightPane.host.removeAll()
+        for window in hostView.windows {
+            addMirrorWindow(kind: window.kind, position: window.position, width: window.physicalWidth)
+        }
+    }
+
+    private func addMirrorWindow(kind: WindowKind, position: simd_float3, width: CGFloat) {
+        for pane in [leftPane, rightPane] {
+            let mirror = pane.host.add(kind: kind, position: position, physicalWidth: width)
+            (mirror.view.content as? MenuContentView)?.onAction = { [weak self] action in
+                self?.handleMenu(action)
+            }
+        }
+    }
+
+    /// Copia posición/tamaño de las ventanas reales a las de cada ojo.
+    private func syncMirrorWindows() {
+        let sources = hostView.windows
+        for pane in [leftPane, rightPane] {
+            guard pane.host.windows.count == sources.count else {
+                buildMirrorWindows()
+                return
+            }
+            for (source, mirror) in zip(sources, pane.host.windows) {
+                mirror.position = source.position
+                mirror.physicalWidth = source.physicalWidth
+                mirror.pinned = source.pinned
+                mirror.view.isHidden = source.view.isHidden
+            }
+        }
+    }
+
+    /// Dibuja la escena en las dos mitades (una por ojo).
+    private func updateStereoPanes(pose: CameraPose, buffer: CVPixelBuffer?) {
+        let size = containerView.bounds.size
+        guard size.width > 1 else { return }
+
+        let half = CGSize(width: size.width / 2, height: size.height)
+        leftPane.frame = CGRect(origin: .zero, size: half)
+        rightPane.frame = CGRect(x: half.width, y: 0, width: half.width, height: half.height)
+
+        leftPane.layoutScene(containerSize: size, eyeShift: -10)
+        rightPane.layoutScene(containerSize: size, eyeShift: 10)
+
+        if let buffer {
+            leftPane.background.enqueue(buffer)
+            rightPane.background.enqueue(buffer)
+        }
+
+        syncMirrorWindows()
+        leftPane.host.layout(pose: pose)
+        rightPane.host.layout(pose: pose)
+        leftPane.render(poses: lastHands)
+        rightPane.render(poses: lastHands)
     }
 
     func closeAllWindows() {

@@ -11,6 +11,7 @@ enum MenuAction: CaseIterable {
     case hands
     case occlusion
     case pin
+    case stereo
     case recenter
     case clear
 
@@ -25,6 +26,7 @@ enum MenuAction: CaseIterable {
         case .hands: return "Manos"
         case .occlusion: return "Oclusión"
         case .pin: return "Pegar"
+        case .stereo: return "VR"
         case .recenter: return "Centrar"
         case .clear: return "Limpiar"
         }
@@ -41,6 +43,7 @@ enum MenuAction: CaseIterable {
         case .hands: return "hand.raised.fill"
         case .occlusion: return "circle.dashed"
         case .pin: return "pin.fill"
+        case .stereo: return "rectangle.split.2x1"
         case .recenter: return "scope"
         case .clear: return "trash"
         }
@@ -58,6 +61,7 @@ enum MenuAction: CaseIterable {
         case .hands: return [UIColor(hex: 0x35E084), UIColor(hex: 0x118A44)]
         case .occlusion: return [UIColor(hex: 0xA96BF0), UIColor(hex: 0x552A93)]
         case .pin: return [UIColor(hex: 0x2BB3A3), UIColor(hex: 0x0D6B60)]
+        case .stereo: return [UIColor(hex: 0x8E7CFF), UIColor(hex: 0x3D2AA8)]
         case .recenter: return [UIColor(hex: 0x53B8FF), UIColor(hex: 0x0E5E9E)]
         case .clear: return [UIColor(hex: 0xF4617B), UIColor(hex: 0x8E1A2E)]
         }
