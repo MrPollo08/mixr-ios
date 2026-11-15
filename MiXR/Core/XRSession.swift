@@ -101,6 +101,8 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private var displayLink: CADisplayLink?
     private var lastPose: CameraPose?
     private var lastHands: [HandPose] = []
+    /// Distancia real al dedo (LiDAR) en metros.
+    private var handDepth: Float?
     private weak var menuWindow: SpatialWindow?
     /// El buffer de la 0.5× que ARKit captura por dentro resultó ser una imagen
     /// de **baja resolución** (pensada para tracking, no para mostrar): se veía
@@ -243,6 +245,11 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             configuration.planeDetection = []
             configuration.isLightEstimationEnabled = false
             configuration.environmentTexturing = .none
+
+            // LiDAR: profundidad real de la mano (sólo en modelos Pro).
+            if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+                configuration.frameSemantics.insert(.sceneDepth)
+            }
 
             sceneView.session = arSession
             sceneView.automaticallyUpdatesLighting = false
@@ -580,7 +587,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                let target = hostView.window(at: tip),
                target.pressAt != nil {
                 overlay.setPointer(nil)
-                gestures.update(poses: poses, host: hostView)
+                gestures.update(poses: poses, host: hostView, handDepth: handDepth)
                 return
             }
             // La mano es el mouse del PC: no se tocan las ventanas.
@@ -594,7 +601,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             } else {
                 overlay.setPointer(nil)
             }
-            gestures.update(poses: poses, host: hostView)
+            gestures.update(poses: poses, host: hostView, handDepth: handDepth)
         }
     }
 

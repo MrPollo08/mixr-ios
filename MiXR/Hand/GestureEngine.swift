@@ -20,6 +20,7 @@ final class GestureEngine {
     private var startCamera: simd_float3 = .zero
     private var startPointsPerMeter: CGFloat = 0
     private var startHandSize: CGFloat = 0
+    private var startDepth: Float = 0
     private var depthRatio: Float = 1
     private var applied: CGSize = .zero
     private var lastPoint: CGPoint?
@@ -49,7 +50,7 @@ final class GestureEngine {
         latch.removeAll()
     }
 
-    func update(poses: [HandPose], host: WindowHostView) {
+    func update(poses: [HandPose], host: WindowHostView, handDepth: Float? = nil) {
         guard let pose = host.lastPose else { return }
         let now = CACurrentMediaTime()
 
@@ -133,7 +134,7 @@ final class GestureEngine {
         }
 
         // 6. Mover (y acercar/alejar con el tamaño aparente de la mano).
-        translate(window, with: owner, to: dragPoint(owner), pose: pose, host: host)
+        translate(window, with: owner, to: dragPoint(owner), pose: pose, host: host, handDepth: handDepth)
     }
 
     // MARK: - Mover + profundidad
@@ -142,7 +143,8 @@ final class GestureEngine {
                            with hand: HandPose,
                            to rawPoint: CGPoint,
                            pose: CameraPose,
-                           host: WindowHostView) {
+                           host: WindowHostView,
+                           handDepth: Float?) {
 
         // Predicción: las articulaciones vienen suavizadas, así que la ventana
         // llegaba tarde y se despegaba del recorrido del dedo.
@@ -174,12 +176,25 @@ final class GestureEngine {
         // Profundidad: sólo si la mano está casi quieta en el plano. Si está
         // recorriendo, no se toca: así sigue el recorrido sin desviarse.
         let moved = hypot(total.width - applied.width, total.height - applied.height)
-        let size = handSize(of: hand)
-        if moved < 2.0, startHandSize > 4, size > 4 {
-            let raw = Float(startHandSize / size)
-            let clamped = min(max(raw, 0.6), 1.7)
-            if abs(clamped - 1) > 0.05 || abs(depthRatio - 1) > 0.05 {
-                depthRatio += (clamped - depthRatio) * 0.12
+
+        if moved < 2.0 {
+            // 1) LiDAR: distancia real en metros (preciso).
+            // 2) Respaldo: tamaño aparente de la mano.
+            var raw: Float?
+            if let handDepth, startDepth > 0.1 {
+                raw = Float(CGFloat(startDepth) / CGFloat(handDepth))
+            } else {
+                let size = handSize(of: hand)
+                if startHandSize > 4, size > 4 {
+                    raw = Float(startHandSize / size)
+                }
+            }
+
+            if let raw {
+                let clamped = min(max(raw, 0.6), 1.7)
+                if abs(clamped - 1) > 0.03 || abs(depthRatio - 1) > 0.03 {
+                    depthRatio += (clamped - depthRatio) * (handDepth != nil ? 0.25 : 0.12)
+                }
             }
         }
         applied = total
@@ -215,6 +230,11 @@ final class GestureEngine {
         }
         startPointsPerMeter = window.pointsPerMeter
         startHandSize = handSize(of: hand)
+        if let current = host.lastPose, let projection = current.project(window.position) {
+            startDepth = projection.depth
+        } else {
+            startDepth = 0
+        }
         depthRatio = 1
         twoHandResize = false
         lastSeenAt = CACurrentMediaTime()
