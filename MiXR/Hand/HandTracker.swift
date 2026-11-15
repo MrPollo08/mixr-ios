@@ -123,7 +123,13 @@ final class HandTracker {
 
             // Misma fórmula que el port de MediaPipe: 1 = cerrado del todo.
             let ratio = hypot(thumb.x - index.x, thumb.y - index.y) / handSize
-            let pinch = min(max(1 - ratio / 0.9, 0), 1)
+            var pinch = min(max(1 - ratio / 0.9, 0), 1)
+
+            // Estándar Quest: la pinza sólo cuenta si el resto de los dedos
+            // están relajados (medio, anular y meñique extendidos).
+            if !otherFingersRelaxed(joints) {
+                pinch = min(pinch, 0.3)
+            }
 
             poses.append(HandPose(key: key, joints: joints, pinchPoint: pinchPoint, pinch: pinch))
         }
@@ -151,6 +157,26 @@ final class HandTracker {
         return poses
     }
 
+    /// Verdadero si al menos dos de los tres dedos restantes están extendidos.
+    /// Evita clicks fantasma cuando la mano está cerrada.
+    private func otherFingersRelaxed(_ joints: [VNHumanHandPoseObservation.JointName: CGPoint]) -> Bool {
+        guard let wrist = joints[.wrist] else { return true }
+
+        let pairs: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
+            (.middleTip, .middleMCP),
+            (.ringTip, .ringMCP),
+            (.littleTip, .littleMCP)
+        ]
+
+        var extended = 0
+        for (tipName, mcpName) in pairs {
+            guard let tip = joints[tipName], let mcp = joints[mcpName] else { continue }
+            let tipDistance = hypot(tip.x - wrist.x, tip.y - wrist.y)
+            let mcpDistance = max(hypot(mcp.x - wrist.x, mcp.y - wrist.y), 1)
+            if tipDistance / mcpDistance > 1.15 { extended += 1 }
+        }
+        return extended >= 2
+    }
     /// Suavizado adaptativo (tipo One Euro): cuando la mano está quieta suaviza
     /// fuerte (sin temblor) y cuando se mueve rápido casi no filtra (sin lag).
     private func smooth(key: String,
