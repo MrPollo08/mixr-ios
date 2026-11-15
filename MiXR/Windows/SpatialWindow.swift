@@ -1,3 +1,4 @@
+import ARKit
 import Foundation
 import UIKit
 import simd
@@ -101,6 +102,8 @@ final class SpatialWindow {
 
     /// Dirección (mundo) a la que mira el panel. Se fija al crearlo.
     var normal = simd_float3(0, 0, 1)
+    /// Ancla de ARKit: mantiene la ventana clavada en el mundo real (6DoF).
+    var anchor: ARAnchor?
     /// Posición suavizada para dibujar (anti temblor del tracking).
     var smoothedCenter: CGPoint?
 

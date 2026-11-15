@@ -65,8 +65,6 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private let stereoRoot = UIView()
     /// Mitad (ojo) sobre la que está actuando la mano en modo VR.
     private var vrTargetPane: StereoPane?
-    /// Recorta el fondo 360 con la malla del LiDAR (cama, pared, muebles).
-    private lazy var meshOccluder = SceneMeshOccluder(parent: sceneView.scene.rootNode)
 
     override init() {
         super.init()
@@ -120,15 +118,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private var displayLink: CADisplayLink?
     private var lastPose: CameraPose?
     private var lastHands: [HandPose] = []
-    /// Distancia real al dedo (LiDAR) en metros.
-    private var handDepth: Float?
-    private let depthAxis = DepthAxisTracker()
     private weak var menuWindow: SpatialWindow?
-    /// El buffer de la 0.5× que ARKit captura por dentro resultó ser una imagen
-    /// de **baja resolución** (pensada para tracking, no para mostrar): se veía
-    /// borrosa y sólo llegaba en algunos frames. Apagado: usamos la imagen
-    /// propia de ARKit, que es nítida y llega a 60 fps.
-    private static let useUltraWideImage = false
+
+    /// 0.5× (la imagen que ARKit captura por dentro) manteniendo el 6DoF.
+    /// Es más campo de visión, pero más suave y sin escena 3D.
+    @Published var wideFOV = false
+
+    /// Para re-anclar justo cuando se suelta una ventana.
+    private var wasDragging = false
 
     /// SceneKit puede devolver una cámara vieja si la vista no se está
     /// renderizando (modo VR). Proyectamos con ARKit, que siempre está al día.
@@ -274,25 +271,11 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         case .arkit:
             let configuration = ARWorldTrackingConfiguration()
             configuration.worldAlignment = .gravity
-            configuration.planeDetection = [.horizontal, .vertical]
-
-            // LiDAR: malla del entorno. Sin esto, en paredes lisas ARKit queda
-            // en 'limited' y pierde la traslación (la ventana te sigue en Z).
-            if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
-                configuration.sceneReconstruction = .meshWithClassification
-            }
+            // Solo rastreo visual + inercial (VIO). Nada de LiDAR ni de mapas
+            // de profundidad: funciona igual en cualquier iPhone compatible.
+            configuration.planeDetection = [.horizontal]
             configuration.isLightEstimationEnabled = false
             configuration.environmentTexturing = .none
-
-            // LiDAR: profundidad real de la mano (sólo en modelos Pro).
-            if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
-                configuration.frameSemantics.insert(.sceneDepth)
-            }
-            // Profundidad suavizada por ARKit: mucho menos temblor en el dedo
-            // y en el empuje de las ventanas.
-            if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
-                configuration.frameSemantics.insert(.smoothedSceneDepth)
-            }
 
             if Self.useRealityKit {
                 // RealityKit usa la MISMA sesión de ARKit: una sola cámara y
@@ -482,13 +465,13 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         if let existing = menuWindow, hostView.windows.contains(where: { $0 === existing }) {
             return
         }
+        // Se crea delante de la cámara (el origen del mundo se resetea al
+        // arrancar) y desde ahí queda clavado: no vuelve a aparecer delante tuyo.
         let position = positionInFrontOfCamera(index: 0, distance: Config.menuDistance)
-        // Si ya hay una posición guardada, se usa ESA: el menú queda
-        // clavado en el mundo y no puede volver a aparecer delante tuyo.
-        let savedPosition = loadMenuPosition()
         saveMenuPosition(position)
         let window = hostView.add(kind: .menu, position: position, physicalWidth: Config.menuWidth)
         menuWindow = window
+        reanchor(window)
 
         (window.view.content as? MenuContentView)?.onAction = { [weak self] action in
             self?.handleMenu(action)
@@ -505,6 +488,8 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                                                transform: transform)
         hostView.setPosition(menu, position, force: true)
         hostView.bringToFront(menu)
+        reanchor(menu)
+        saveMenuPosition(position)
     }
 
     private func handleMenu(_ action: MenuAction) {
@@ -519,6 +504,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         case .occlusion: toggleOcclusion()
         case .stereo: stereoEnabled.toggle()
         case .dreamspace: toggleEnvironment()
+        case .wide: wideFOV.toggle()
         case .recenter: recenterView()
         case .clear: closeAllWindows()
         }
@@ -555,11 +541,13 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                     ultraWideAt = now
                 }
 
-                let useUltraWide = ultraWideBuffer != nil && now - ultraWideAt < 0.5
+                let useUltraWide = ultraWideBuffer != nil && now - ultraWideAt < 1.5
 
-                if Self.useUltraWideImage, useUltraWide, let validUltraWide = ultraWideBuffer {
-                    // 6DoF de ARKit + imagen de la 0.5×, compuesta en GPU.
-                    cameraSampleView.isHidden = false
+                if wideFOV, useUltraWide, let validUltraWide = ultraWideBuffer {
+                    // 0.5× real (la que ARKit captura por dentro) + 6DoF de ARKit:
+                    // las ventanas siguen clavadas en el mundo, con más campo de
+                    // visión. En este modo no se dibuja la escena 3D (mar/oclusión).
+                    cameraSampleView.isHidden = stereoEnabled
                     sceneView.isHidden = true
                     cameraSampleView.enqueue(validUltraWide)
 
@@ -585,27 +573,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                     buffer = frame.capturedImage
                 }
 
-                updateDebug(frame: frame, usingUltraWide: Self.useUltraWideImage && useUltraWide)
-
-                // El cuarto real recorta el fondo 360 (cama, pared, muebles).
-                if sceneView.scene.rootNode.childNode(withName: "skyboxVideo",
-                                                      recursively: false) != nil {
-                    meshOccluder.update(frame: frame)
-                }
-
-                // LiDAR: distancia real a la palma. Con esto se empujan y se
-                // traen las ventanas (profundidad de verdad, no una estimación).
-                let depthMap = frame.smoothedSceneDepth?.depthMap ?? frame.sceneDepth?.depthMap
-                if let pose, let depthMap, let palm = lastHands.first?.palmCenter,
-                   let depth = HandDepthSampler.depth(at: palm,
-                                                      depthMap: depthMap,
-                                                      imageAspect: pose.imageAspect,
-                                                      viewport: viewport,
-                                                      orientation: orientation) {
-                    handDepth = depth
-                } else {
-                    handDepth = nil
-                }
+                updateDebug(frame: frame, usingUltraWide: wideFOV && useUltraWide)
 
                 // 6DoF: si el tracking está limitado, las ventanas se mueven con
                 // más calma (que queden "duras" y no temblando).
@@ -614,20 +582,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                 } else {
                     pose?.trackingLimited = true
                 }
+
+                // Anclajes: las ventanas quedan clavadas en el mundo real.
+                syncAnchors(dragging: gestures.isDragging)
             }
 
         case .ultraWide:
             buffer = wideView.latestPixelBuffer
             pose = wideView.currentPose(viewport: viewport, orientation: orientation)
-        }
-
-        // Fusion LiDAR: corrige la traslacion que ARKit no entrega en limited.
-        if cameraMode == .arkit, let frame = arSession.currentFrame, let basePose = pose {
-            let correction = depthAxis.correction(depthMap: frame.sceneDepth?.depthMap,
-                                                  cameraTransform: frame.camera.transform)
-            if let correction, false, abs(correction) > 0.04 {
-                pose = basePose.moved(alongView: -correction)
-            }
         }
 
         guard let pose else { return }
@@ -781,7 +743,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                let target = hostView.window(at: tip),
                target.pressAt != nil {
                 overlay.setPointer(nil)
-                gestures.update(poses: poses, host: hostView, handDepth: handDepth)
+                gestures.update(poses: poses, host: hostView, handDepth: nil)
                 return
             }
             // La mano es el mouse del PC: no se tocan las ventanas.
@@ -820,7 +782,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                 }
             }
 
-            gestures.update(poses: localPoses, host: targetHost, handDepth: handDepth)
+            gestures.update(poses: localPoses, host: targetHost, handDepth: nil)
 
             // El arrastre ocurre en la copia de la mitad: se devuelve al mundo.
             if stereoEnabled, let dragged = gestures.grabbedWindow,
@@ -849,10 +811,57 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
     private func add(kind: WindowKind, width: CGFloat, distance: Float) {
         let position = positionInFrontOfCamera(index: hostView.windows.count, distance: distance)
-        hostView.add(kind: kind, position: position, physicalWidth: width)
+        let window = hostView.add(kind: kind, position: position, physicalWidth: width)
+        reanchor(window)
 
         if stereoEnabled {
             addMirrorWindow(kind: kind, position: position, width: width)
+        }
+    }
+
+    // MARK: - Anclajes del mundo (6DoF, sin LiDAR)
+
+    /// Crea el ancla de una ventana si todavía no tiene.
+    @discardableResult
+    private func anchor(for window: SpatialWindow) -> ARAnchor {
+        if let anchor = window.anchor { return anchor }
+        var matrix = matrix_identity_float4x4
+        let position = window.position
+        matrix.columns.3 = simd_float4(position.x, position.y, position.z, 1)
+        let anchor = ARAnchor(transform: matrix)
+        window.anchor = anchor
+        arSession.add(anchor: anchor)
+        return anchor
+    }
+
+    /// Vuelve a clavar la ventana en el mundo, en el punto donde está ahora.
+    /// Se llama al soltarla: desde ese instante no se mueve más.
+    func reanchor(_ window: SpatialWindow) {
+        guard cameraMode == .arkit else { return }
+        if let old = window.anchor {
+            arSession.remove(anchor: old)
+            window.anchor = nil
+        }
+        anchor(for: window)
+    }
+
+    /// ARKit puede corregir el origen del mundo al re-localizar. El ancla manda:
+    /// así la ventana sigue clavada en el lugar real aunque el tracking falle.
+    private func syncAnchors(dragging: Bool) {
+        // Al soltar, el ancla se muda a donde quedó la ventana.
+        if wasDragging, !dragging {
+            for window in hostView.windows { reanchor(window) }
+        }
+        wasDragging = dragging
+        guard !dragging else { return }
+
+        for window in hostView.windows {
+            let anchor = anchor(for: window)
+            let column = anchor.transform.columns.3
+            let target = simd_float3(column.x, column.y, column.z)
+            if simd_distance(target, window.position) > 0.004 {
+                window.position = target
+            }
         }
     }
 
@@ -943,6 +952,12 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     }
 
     func closeAllWindows() {
+        for window in hostView.windows where window !== menuWindow {
+            if let anchor = window.anchor {
+                arSession.remove(anchor: anchor)
+                window.anchor = nil
+            }
+        }
         hostView.removeAll(except: menuWindow)
     }
 

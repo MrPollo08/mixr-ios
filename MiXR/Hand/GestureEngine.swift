@@ -237,10 +237,10 @@ final class GestureEngine {
             } else {
                 appliedDistance = clamped
             }
-        } else if startHandDepth > 0.1 {
-            // Sin LiDAR: respaldo con el tamaño aparente de la mano.
+        } else if startHandSize > 4 {
+            // Sin LiDAR: se estima con el tamaño aparente de la mano (visión).
             let size = handSize(of: hand)
-            if startHandSize > 4, size > 4 {
+            if size > 4 {
                 let ratio = min(max(CGFloat(startHandSize / size), 0.6), 1.7)
                 let target = CGFloat(startDepth) * ratio
                 appliedDistance += (target - appliedDistance) * 0.12
