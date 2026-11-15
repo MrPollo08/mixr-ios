@@ -284,6 +284,15 @@ final class WindowHostView: UIView {
 
     // MARK: - Hit testing
 
+    /// Ventana bajo el punto o cerca (margen): sirve para mostrar el cursor
+    /// cuando la mano se acerca, sin tener que estar justo encima.
+    func window(near point: CGPoint, margin: CGFloat = 46) -> SpatialWindow? {
+        for window in windows.reversed() where !window.view.isHidden {
+            if window.view.frame.insetBy(dx: -margin, dy: -margin).contains(point) { return window }
+        }
+        return nil
+    }
+
     func window(at point: CGPoint) -> SpatialWindow? {
         for window in windows.reversed() where !window.view.isHidden {
             if window.view.frame.contains(point) { return window }

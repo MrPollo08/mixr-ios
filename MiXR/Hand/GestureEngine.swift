@@ -177,7 +177,7 @@ final class GestureEngine {
         // recorriendo, no se toca: así sigue el recorrido sin desviarse.
         let moved = hypot(total.width - applied.width, total.height - applied.height)
 
-        if moved < 2.0 {
+        if false /* una mano no cambia el tamaño: eso es con dos manos */ , moved < 2.0 {
             // 1) LiDAR: distancia real en metros (preciso).
             // 2) Respaldo: tamaño aparente de la mano.
             var raw: Float?
@@ -211,9 +211,8 @@ final class GestureEngine {
 
         // El menú no se puede cerrar, pero sí mover: si la pinza cae en un tile,
         // se aprieta; si cae en el panel, se arrastra como cualquier ventana.
-        // Elegir es solo con el cursor (dwell) o con el dedo en pantalla:
-        // la pinza ya no selecciona, se usa para agarrar/mover ventanas.
-        if window.pressAt != nil {
+        // Pinza sobre un botón (menú/teclado) = clic del mouse virtual.
+        if let press = window.pressAt, press(point) {
             return
         }
 
