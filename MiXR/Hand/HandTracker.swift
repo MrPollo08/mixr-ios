@@ -13,6 +13,8 @@ struct HandPose {
     let pinchPoint: CGPoint
     /// 0 = mano abierta, 1 = pellizco cerrado.
     let pinch: CGFloat
+    /// Palma abierta con (casi) todos los dedos extendidos.
+    let openPalm: Bool
 }
 
 /// Detección de manos con Vision (21 articulaciones por mano, hasta 2 manos).
