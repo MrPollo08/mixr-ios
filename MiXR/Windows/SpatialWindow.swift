@@ -83,6 +83,11 @@ final class SpatialWindow {
     var pointsPerMeter: CGFloat = 0
     var currentURL: URL?
 
+    /// Si está "pegada", la ventana se queda delante de la cara (no se ancla
+    /// al mundo). Es lo opuesto al anclaje y se elige con el tile "Pegar".
+    var pinned = false
+    var pinnedDistance: Float = 1.1
+
     /// Si la ventana es un menú: apretar un botón (en coordenadas del host).
     var pressAt: ((CGPoint) -> Bool)?
     /// El dedo se movió sobre el menú (nil = no hay dedo cerca). dt en segundos.

@@ -29,11 +29,15 @@ struct RootView: View {
                 HStack {
                     Spacer(minLength: 0)
                     Text(session.debugText)
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.45))
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.85))
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.black.opacity(0.55)))
                 }
+                .padding(.bottom, 4)
 
                 Text(hintText)
                     .font(.system(size: 10, weight: .medium))

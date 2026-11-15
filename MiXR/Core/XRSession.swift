@@ -285,6 +285,18 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         placeMenuFront(transform: lastPose?.transform ?? matrix_identity_float4x4)
     }
 
+    /// Alterna el menú entre **anclado al mundo** y **pegado a la cara**.
+    func togglePinnedMenu() {
+        guard let menu = menuWindow else { return }
+        if !menu.pinned, let pose = lastPose, let projection = pose.project(menu.position) {
+            menu.pinnedDistance = projection.depth
+        }
+        menu.pinned.toggle()
+        if let pose = lastPose {
+            hostView.layout(pose: pose)
+        }
+    }
+
     // MARK: - Menú flotante
 
     private func ensureMenu() {
@@ -322,6 +334,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         case .control: toggleControlMode()
         case .hands: toggleHands()
         case .occlusion: toggleOcclusion()
+        case .pin: togglePinnedMenu()
         case .recenter: recenterView()
         case .clear: closeAllWindows()
         }
@@ -438,17 +451,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         }
 
         let camera = frame.camera.transform.columns.3
-        var text = String(format: "%@·%@·%dfps·w%d·cam %.2f %.2f·menú",
-                          usingUltraWide ? "0.5×" : "1×",
+        let menu = menuWindow?.position ?? simd_float3.zero
+        let text = String(format: "%@ %@ %dfps w%d  c %.2f,%.2f  m %.2f,%.2f",
+                          usingUltraWide ? "0.5x" : "1x",
                           tracking,
                           Int(smoothedFPS),
                           hostView.windows.count,
-                          Double(camera.x), Double(camera.z))
-
-        if let menu = menuWindow {
-            let position = menu.position
-            text += String(format: " %.2f %.2f", Double(position.x), Double(position.z))
-        }
+                          Double(camera.x), Double(camera.z),
+                          Double(menu.x), Double(menu.z))
         debugText = text
     }
 

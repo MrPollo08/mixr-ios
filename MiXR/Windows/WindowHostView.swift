@@ -166,7 +166,29 @@ final class WindowHostView: UIView {
     }
 
     private func layoutWindow(_ window: SpatialWindow) {
-        guard let pose = lastPose, let projection = pose.project(window.position) else {
+        guard let pose = lastPose else {
+            window.view.isHidden = true
+            return
+        }
+
+        // Modo "pegada": siempre delante, mismo tamaño, sin importar dónde estés.
+        if window.pinned {
+            let depth = max(window.pinnedDistance, 0.3)
+            let pointsPerMeter = ((pose.focalX + pose.focalY) / 2) / CGFloat(depth)
+            window.pointsPerMeter = pointsPerMeter
+            window.view.isHidden = false
+            window.view.bounds = CGRect(origin: .zero, size: window.view.baseSize)
+            window.view.center = CGPoint(x: pose.viewport.width / 2,
+                                         y: pose.viewport.height / 2)
+
+            let targetWidth = window.physicalWidth * pointsPerMeter
+            let scale = targetWidth / window.view.baseSize.width
+            window.view.transform = CGAffineTransform(scaleX: scale, y: scale)
+            window.view.alpha = 1
+            return
+        }
+
+        guard let projection = pose.project(window.position) else {
             window.view.isHidden = true
             return
         }
