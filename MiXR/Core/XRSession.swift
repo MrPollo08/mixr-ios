@@ -110,6 +110,10 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     /// propia de ARKit, que es nítida y llega a 60 fps.
     private static let useUltraWideImage = false
 
+    /// SceneKit puede devolver una cámara vieja si la vista no se está
+    /// renderizando (modo VR). Proyectamos con ARKit, que siempre está al día.
+    private static let useSceneKitProjector = false
+
     /// Cuántas veces se lanzó ARKit y cuántos frames llegaron (diagnóstico).
     private var arkitRuns = 0
     private var frameCount = 0
@@ -492,7 +496,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
         // El proyector sale del renderer del fondo: mismas matemáticas que la
         // imagen de la cámara, así la ventana no puede "nadar" al moverte.
-        if cameraMode == .arkit, arSession.currentFrame != nil {
+        if Self.useSceneKitProjector, cameraMode == .arkit, arSession.currentFrame != nil {
             let cameraTransform = pose.transform
             let rightColumn = cameraTransform.columns.0
             let right = simd_float3(rightColumn.x, rightColumn.y, rightColumn.z)
