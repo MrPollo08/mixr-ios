@@ -103,6 +103,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private var lastHands: [HandPose] = []
     /// Distancia real al dedo (LiDAR) en metros.
     private var handDepth: Float?
+    private let depthAxis = DepthAxisTracker()
     private weak var menuWindow: SpatialWindow?
     /// El buffer de la 0.5× que ARKit captura por dentro resultó ser una imagen
     /// de **baja resolución** (pensada para tracking, no para mostrar): se veía

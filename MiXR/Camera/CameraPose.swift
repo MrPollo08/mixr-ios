@@ -57,6 +57,31 @@ struct CameraPose {
                           depth: depth)
     }
 
+    /// Copia con la cámara corrida a lo largo de su eje de visión (+ = adelante).
+    func moved(alongView meters: Float) -> CameraPose {
+        var matrix = transform
+        let backward = simd_float3(matrix.columns.2.x, matrix.columns.2.y, matrix.columns.2.z)
+        let shift = backward * -meters
+        matrix.columns.3 = simd_float4(matrix.columns.3.x + shift.x,
+                                       matrix.columns.3.y + shift.y,
+                                       matrix.columns.3.z + shift.z, 1)
+        return CameraPose(transform: matrix, focalX: focalX, focalY: focalY,
+                          viewport: viewport, imageAspect: imageAspect,
+                          arkitCamera: arkitCamera, orientation: orientation)
+    }
+
+    private init(transform: simd_float4x4, focalX: CGFloat, focalY: CGFloat,
+                 viewport: CGSize, imageAspect: CGFloat,
+                 arkitCamera: ARCamera?, orientation: UIInterfaceOrientation) {
+        self.transform = transform
+        self.focalX = focalX
+        self.focalY = focalY
+        self.viewport = viewport
+        self.imageAspect = imageAspect
+        self.arkitCamera = arkitCamera
+        self.orientation = orientation
+    }
+
     // MARK: - Constructores
 
     /// ARKit con su cámara: proyección de Apple (6DoF).
