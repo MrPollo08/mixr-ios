@@ -69,6 +69,10 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     override init() {
         super.init()
         loadVRSettings()
+
+        // Mando Bluetooth: A abre/cierra el menú, B recentra.
+        gamepad.onPrimary = { [weak self] in self?.toggleMenuWithPalm() }
+        gamepad.onSecondary = { [weak self] in self?.recenterView() }
     }
 
     private static let modeKey = "mixr.cameraMode"
@@ -120,14 +124,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     private var lastHands: [HandPose] = []
     private weak var menuWindow: SpatialWindow?
 
-    /// 0.5× (la imagen que ARKit captura por dentro) manteniendo el 6DoF.
-    /// Es más campo de visión, pero más suave y sin escena 3D.
-    @Published var wideFOV = false
-
     /// Para re-anclar justo cuando se suelta una ventana.
     private var wasDragging = false
-    /// Cuándo se pidió el 0.5× (para decidir el respaldo de AVFoundation).
-    private var wideRequestedAt: CFTimeInterval = 0
+    /// Control con mando Bluetooth (el joystick mueve el menú).
+    private let gamepad = GamepadController()
+    /// El mando está moviendo el menú (para no re-anclarlo en el medio).
+    private var gamepadMoving = false
+    /// Hora del tick anterior (para el movimiento del mando).
+    private var lastTickAt: CFTimeInterval = 0
 
     /// SceneKit puede devolver una cámara vieja si la vista no se está
     /// renderizando (modo VR). Proyectamos con ARKit, que siempre está al día.
@@ -373,29 +377,12 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         setCameraMode(cameraMode == .ultraWide ? .arkit : .ultraWide)
     }
 
-    /// Tile "0.5x". Primero intenta la imagen ultra gran angular que ARKit
-    /// captura por dentro (esa **mantiene el 6DoF**). Si este iPhone/iOS no la
-    /// expone, cae a la cámara 0.5× real de AVFoundation: más nítida y mucho más
-    /// campo de visión, pero sin anclaje de traslación.
-    func toggleWide() {
-        if wideFOV {
-            wideFOV = false
-            if cameraMode == .ultraWide {
-                setCameraMode(.arkit)
-            }
-            return
-        }
-        wideFOV = true
-        wideRequestedAt = CACurrentMediaTime()
-    }
-
     func setCameraMode(_ mode: CameraMode) {
         guard mode != cameraMode else { return }
         let wasRunning = isRunning
         pause()
 
         cameraMode = mode
-        if mode == .arkit { wideFOV = false }
         saveMode()
         lastPose = nil
         lastHands = []
@@ -523,7 +510,6 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         case .occlusion: toggleOcclusion()
         case .stereo: stereoEnabled.toggle()
         case .dreamspace: toggleEnvironment()
-        case .wide: toggleWide()
         case .recenter: recenterView()
         case .clear: closeAllWindows()
         }
@@ -553,46 +539,20 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                 }
                 lastFrameTime = frame.timestamp
 
-                let candidate = ARFrameUltraWide.pixelBuffer(from: frame)
-                    .flatMap { Self.isUsable($0) ? $0 : nil }
-                if let candidate {
-                    ultraWideBuffer = candidate
-                    ultraWideAt = now
-                }
+                // Cámara normal de ARKit: 6DoF siempre.
+                cameraSampleView.isHidden = true
+                sceneView.isHidden = Self.useRealityKit
+                realityView?.isHidden = !Self.useRealityKit
 
-                let useUltraWide = ultraWideBuffer != nil && now - ultraWideAt < 1.5
+                let imageSize = CGSize(width: CVPixelBufferGetWidth(frame.capturedImage),
+                                       height: CVPixelBufferGetHeight(frame.capturedImage))
+                pose = CameraPose(arkitCamera: frame.camera,
+                                  orientation: orientation,
+                                  viewport: viewport,
+                                  imageSize: imageSize)
+                buffer = frame.capturedImage
 
-                if wideFOV, useUltraWide, let validUltraWide = ultraWideBuffer {
-                    // 0.5× real (la que ARKit captura por dentro) + 6DoF de ARKit:
-                    // las ventanas siguen clavadas en el mundo, con más campo de
-                    // visión. En este modo no se dibuja la escena 3D (mar/oclusión).
-                    cameraSampleView.isHidden = stereoEnabled
-                    sceneView.isHidden = true
-                    cameraSampleView.enqueue(validUltraWide)
-
-                    let size = CGSize(width: CVPixelBufferGetWidth(validUltraWide),
-                                      height: CVPixelBufferGetHeight(validUltraWide))
-                    pose = CameraPose(cameraTransform: frame.camera.transform,
-                                      orientation: orientation,
-                                      viewport: viewport,
-                                      imageSize: size,
-                                      longFieldOfView: Config.ultraWideLongFieldOfView * .pi / 180)
-                    buffer = validUltraWide
-                } else {
-                    cameraSampleView.isHidden = true
-                    sceneView.isHidden = Self.useRealityKit
-                    realityView?.isHidden = !Self.useRealityKit
-
-                    let imageSize = CGSize(width: CVPixelBufferGetWidth(frame.capturedImage),
-                                           height: CVPixelBufferGetHeight(frame.capturedImage))
-                    pose = CameraPose(arkitCamera: frame.camera,
-                                      orientation: orientation,
-                                      viewport: viewport,
-                                      imageSize: imageSize)
-                    buffer = frame.capturedImage
-                }
-
-                updateDebug(frame: frame, usingUltraWide: wideFOV && useUltraWide)
+                updateDebug(frame: frame, usingUltraWide: false)
 
                 // 6DoF: si el tracking está limitado, las ventanas se mueven con
                 // más calma (que queden "duras" y no temblando).
@@ -603,16 +563,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                 }
 
                 // Anclajes: las ventanas quedan clavadas en el mundo real.
-                syncAnchors(dragging: gestures.isDragging)
-
-                // Si pediste 0.5× y ARKit no expone su imagen ultra gran angular
-                // en este iPhone, pasamos a la cámara 0.5× real (AVFoundation).
-                if wideFOV, ultraWideBuffer == nil, now - wideRequestedAt > 1.0 {
-                    wideRequestedAt = now + 3600   // una sola vez
-                    DispatchQueue.main.async { [weak self] in
-                        self?.setCameraMode(.ultraWide)
-                    }
-                }
+                syncAnchors(dragging: gestures.isDragging || gamepadMoving)
             }
 
         case .ultraWide:
@@ -622,6 +573,9 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
         guard let pose else { return }
         lastPose = pose
+
+        // Mando Bluetooth: el joystick mueve el menú (en el plano de la cámara).
+        updateGamepad(pose: pose)
 
         // El fondo 360 acompaña a la cámara (no se puede rodear).
         if let sky = sceneView.scene.rootNode.childNode(withName: "skyboxVideo", recursively: false) as? SkyboxVideoNode {
@@ -871,6 +825,32 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             window.anchor = nil
         }
         anchor(for: window)
+    }
+
+    // MARK: - Mando Bluetooth
+
+    /// El stick mueve el menú en el plano de la cámara (6DoF), a velocidad
+    /// constante. Al soltarlo, se re-ancla donde quedó.
+    private func updateGamepad(pose: CameraPose) {
+        let now = CACurrentMediaTime()
+        let dt = lastTickAt == 0 ? 0.016 : min(0.1, now - lastTickAt)
+        lastTickAt = now
+
+        let axes = gamepad.axes
+        guard let menu = menuWindow,
+              abs(axes.x) > 0.01 || abs(axes.y) > 0.01 else {
+            gamepadMoving = false
+            return
+        }
+
+        let speed: CGFloat = 1.1      // metros por segundo
+        let right = pose.transform.columns.0
+        let up = pose.transform.columns.1
+        let delta = simd_float3(right.x, right.y, right.z) * Float(axes.x * speed * CGFloat(dt))
+            + simd_float3(up.x, up.y, up.z) * Float(axes.y * speed * CGFloat(dt))
+
+        hostView.setPosition(menu, menu.position + delta, force: true)
+        gamepadMoving = true
     }
 
     /// ARKit puede corregir el origen del mundo al re-localizar. El ancla manda:

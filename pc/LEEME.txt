@@ -1,0 +1,31 @@
+DREAMSPACE - PC
+==============
+
+1) PANTALLA DEL PC (video)
+   - En el iPhone: abrí el tile "PC". Arriba de la ventana aparece una IP,
+     por ejemplo 192.168.1.3
+   - En la PC: doble clic en "Dreamspace - Pantalla PC.bat"
+   - Escribí esa IP y Enter. Listo: se ve tu escritorio en la ventana.
+   - Se acuerda de la última IP, la próxima vez apretá Enter.
+   - Para cortar: Ctrl+C en esa ventana.
+
+2) MOUSE (controlar el PC con la mano)
+   - En la PC: doble clic en "Dreamspace - Mouse PC.bat"
+   - Dejá esa ventana abierta.
+   - En el iPhone: tile "Mouse". El índice mueve el cursor, la pinza hace clic.
+   - Si el programa que querés controlar corre como administrador, abrí el
+     .bat también como administrador.
+
+3) SI NO CONECTA
+   - El iPhone y la PC tienen que estar en la misma red WiFi.
+   - Abrí el tile "PC" ANTES de correr el .bat.
+   - Si Windows pregunta por el firewall, permitir en redes privadas.
+   - Probar en la PC:  ping <IP del iPhone>
+
+4) MANDO BLUETOOTH (nuevo)
+   - Conectá el mando por Bluetooth en Ajustes del iPhone.
+   - Stick izquierdo / cruceta: mueve el menú.
+   - A: abre o cierra el menú.   B / X: recentra el menú.
+
+Los archivos viven también en:
+C:\Users\User\Documents\Proyecto predeterminado\MiXR-iOS\pc\

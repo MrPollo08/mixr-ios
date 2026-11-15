@@ -12,7 +12,6 @@ enum MenuAction: CaseIterable {
     case occlusion
     case stereo
     case dreamspace
-    case wide
     case recenter
     case clear
 
@@ -28,7 +27,6 @@ enum MenuAction: CaseIterable {
         case .occlusion: return "Oclusión"
         case .stereo: return "VR"
         case .dreamspace: return "Dreamspace"
-        case .wide: return "0.5x"
         case .recenter: return "Centrar"
         case .clear: return "Limpiar"
         }
@@ -46,7 +44,6 @@ enum MenuAction: CaseIterable {
         case .occlusion: return "circle.dashed"
         case .stereo: return "rectangle.split.2x1"
         case .dreamspace: return "water.waves"
-        case .wide: return "arrow.up.left.and.arrow.down.right"
         case .recenter: return "scope"
         case .clear: return "trash"
         }
@@ -64,7 +61,6 @@ enum MenuAction: CaseIterable {
         case .occlusion: return [UIColor(hex: 0xA96BF0), UIColor(hex: 0x552A93)]
         case .stereo: return [UIColor(hex: 0x8E7CFF), UIColor(hex: 0x3D2AA8)]
         case .dreamspace: return [UIColor(hex: 0x2E7DD7), UIColor(hex: 0x11355E)]
-        case .wide: return [UIColor(hex: 0x39C0A0), UIColor(hex: 0x0C5C4C)]
         case .recenter: return [UIColor(hex: 0x53B8FF), UIColor(hex: 0x0E5E9E)]
         case .clear: return [UIColor(hex: 0xF4617B), UIColor(hex: 0x8E1A2E)]
         }
