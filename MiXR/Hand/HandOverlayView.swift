@@ -25,14 +25,14 @@ final class HandOverlayView: UIView {
         // Borde blanco: se dibuja un trazo más grueso debajo.
         edgeLayer.fillColor = UIColor.clear.cgColor
         edgeLayer.strokeColor = UIColor.white.withAlphaComponent(0.85).cgColor
-        edgeLayer.lineWidth = 7
+        edgeLayer.lineWidth = 17
         edgeLayer.lineCap = .round
         edgeLayer.lineJoin = .round
 
         // Relleno oscuro translúcido encima.
         fillLayer.fillColor = UIColor.black.withAlphaComponent(0.55).cgColor
         fillLayer.strokeColor = UIColor.black.withAlphaComponent(0.55).cgColor
-        fillLayer.lineWidth = 4.5
+        fillLayer.lineWidth = 13
         fillLayer.lineCap = .round
         fillLayer.lineJoin = .round
 

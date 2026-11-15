@@ -407,7 +407,6 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         case .control: toggleControlMode()
         case .hands: toggleHands()
         case .occlusion: toggleOcclusion()
-        case .pin: togglePinnedMenu()
         case .stereo: stereoEnabled.toggle()
         case .recenter: recenterView()
         case .clear: closeAllWindows()

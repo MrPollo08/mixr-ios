@@ -127,8 +127,10 @@ final class HandTracker {
 
             // Estándar Quest: la pinza sólo cuenta si el resto de los dedos
             // están relajados (medio, anular y meñique extendidos).
-            if !otherFingersRelaxed(joints) {
-                pinch = min(pinch, 0.3)
+            // Distancia real (la mano mide ~9 cm de muñeca a nudillo).
+            let millimeters = ratio * 90
+            if !otherFingersRelaxed(joints) || millimeters > 22 {
+                pinch = min(pinch, 0.25)
             }
 
             poses.append(HandPose(key: key, joints: joints, pinchPoint: pinchPoint, pinch: pinch))
@@ -173,9 +175,9 @@ final class HandTracker {
             guard let tip = joints[tipName], let mcp = joints[mcpName] else { continue }
             let tipDistance = hypot(tip.x - wrist.x, tip.y - wrist.y)
             let mcpDistance = max(hypot(mcp.x - wrist.x, mcp.y - wrist.y), 1)
-            if tipDistance / mcpDistance > 1.15 { extended += 1 }
+            if tipDistance / mcpDistance > 1.22 { extended += 1 }
         }
-        return extended >= 2
+        return extended == 3
     }
     /// Suavizado adaptativo (tipo One Euro): cuando la mano está quieta suaviza
     /// fuerte (sin temblor) y cuando se mueve rápido casi no filtra (sin lag).
