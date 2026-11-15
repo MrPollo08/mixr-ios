@@ -740,7 +740,23 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
             } else {
                 overlay.setPointer(nil)
             }
-            gestures.update(poses: poses, host: hostView, handDepth: handDepth)
+            // En VR la interacción va sobre la mitad izquierda (la visible).
+            let targetHost = stereoEnabled ? leftPane.host : hostView
+            let localPoses = stereoEnabled ? convertedPoses(poses, to: targetHost) : poses
+            if stereoEnabled {
+                let flag = localPoses.first?.pinchPoint
+                leftPane.overlay.setPointer(flag)
+                rightPane.overlay.setPointer(flag)
+            }
+            gestures.update(poses: localPoses, host: targetHost, handDepth: handDepth)
+
+            // Devolver el arrastre de la mitad al modelo del mundo.
+            if stereoEnabled, let dragged = gestures.grabbedWindow,
+               let index = leftPane.host.windows.firstIndex(where: {  === dragged }),
+               index < hostView.windows.count {
+                hostView.windows[index].position = dragged.position
+                hostView.windows[index].physicalWidth = dragged.physicalWidth
+            }
         }
     }
 
