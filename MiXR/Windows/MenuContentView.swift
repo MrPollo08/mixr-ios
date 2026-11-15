@@ -60,6 +60,7 @@ enum MenuAction: CaseIterable {
         case .hands: return [UIColor(hex: 0x35E084), UIColor(hex: 0x118A44)]
         case .occlusion: return [UIColor(hex: 0xA96BF0), UIColor(hex: 0x552A93)]
         case .stereo: return [UIColor(hex: 0x8E7CFF), UIColor(hex: 0x3D2AA8)]
+        case .dreamspace: return [UIColor(hex: 0x2E7DD7), UIColor(hex: 0x11355E)]
         case .recenter: return [UIColor(hex: 0x53B8FF), UIColor(hex: 0x0E5E9E)]
         case .clear: return [UIColor(hex: 0xF4617B), UIColor(hex: 0x8E1A2E)]
         }
