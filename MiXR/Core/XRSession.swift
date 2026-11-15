@@ -276,6 +276,13 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
                 ? [.resetTracking, .removeExistingAnchors]
                 : []
             arSession.run(configuration, options: options)
+
+            // Panel 3D de prueba: objeto real en el mundo (se puede rodear).
+            if sceneView.scene.rootNode.childNode(withName: "scenePanel", recursively: false) == nil {
+                let panel = ScenePanelNode()
+                panel.position = SCNVector3(0, 1.35, -1.6)
+                sceneView.scene.rootNode.addChildNode(panel)
+            }
             arkitRuns += 1
             wideView.stop()
 
