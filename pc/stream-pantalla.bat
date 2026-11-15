@@ -1,17 +1,36 @@
 @echo off
 rem ---------------------------------------------------------------------------
-rem  Manda la pantalla del PC al iPhone MiXR.
-rem  Uso: doble clic y escribi la IP que muestra la ventana "PC" de la app.
-rem  O pasala como argumento:  stream-pantalla.bat 192.168.0.42
+rem  Manda la pantalla del PC al iPhone (Dreamspace).
+rem  Uso: doble clic y escribi la IP que muestra la ventana "Pantalla del PC".
+rem  O pasala como argumento:  stream-pantalla.bat 192.168.1.3
 rem ---------------------------------------------------------------------------
 setlocal
 
 set IP=%~1
-if not "%IP%"=="" goto run
+if not "%IP%"=="" goto checkffmpeg
 
 :ask
 set /p IP=Escribi la IP del iPhone: 
 if "%IP%"=="" goto empty
+
+:checkffmpeg
+rem Buscar ffmpeg en el PATH; si no esta, probar la ruta de hermes.
+where ffmpeg >nul 2>&1
+if not errorlevel 1 goto run
+
+for /d %%D in ("%LOCALAPPDATA%\hermes\tools\ffmpeg-*") do (
+  if exist "%%D\bin\ffmpeg.exe" set "PATH=%%D\bin;%PATH%"
+)
+where ffmpeg >nul 2>&1
+if not errorlevel 1 goto run
+
+echo.
+echo  No encuentro ffmpeg.
+echo  Opcion 1: cerra esta ventana y volve a abrirla (para que tome el PATH).
+echo  Opcion 2: instalar con   winget install Gyan.FFmpeg
+echo.
+pause
+exit /b 1
 
 :run
 echo.
@@ -19,7 +38,7 @@ echo Conectando a %IP% puerto 47295 ...
 echo Abortar con Ctrl+C.
 echo.
 
-ffmpeg -f gdigrab -framerate 60 -i desktop ^
+ffmpeg -hide_banner -f gdigrab -framerate 60 -i desktop ^
   -vf "scale=-2:1080" ^
   -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -g 60 ^
   -bsf:v dump_extra -flush_packets 1 ^
