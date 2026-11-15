@@ -154,8 +154,6 @@ final class HandTracker {
                                   pinch: pinch, openPalm: openPalm,
                                   closedFist: closedFist, palmCenter: palmCenter,
                                   confidence: keyConfidence))
-                                  closedFist: closedFist, palmCenter: palmCenter,
-                                  confidence: keyConfidence))
         }
 
         let stale = smoothed.keys.filter { !seen.contains($0) }
