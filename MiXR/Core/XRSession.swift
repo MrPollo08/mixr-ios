@@ -50,7 +50,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
     @Published private(set) var cameraMode: CameraMode = XRSession.savedMode()
     @Published private(set) var occlusionEnabled = false
     /// Modo VR: la escena se dibuja dos veces, una por ojo.
-    @Published var stereoEnabled = false {
+    @Published var stereoEnabled = true {
         didSet { if stereoEnabled != oldValue { applyStereoMode() } }
     }
     /// Ajustes del marco de las gafas (pantalla previa a la cámara).
@@ -265,6 +265,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         }
 
         applyModeVisibility()
+        applyStereoMode()
 
         // Los frames se leen acá (no con el delegate de ARSession) para no
         // pelearse con ARSCNView, que necesita quedarse con ese delegate.
