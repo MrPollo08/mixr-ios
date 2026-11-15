@@ -133,7 +133,9 @@ final class HandTracker {
                 pinch = min(pinch, 0.25)
             }
 
-            poses.append(HandPose(key: key, joints: joints, pinchPoint: pinchPoint, pinch: pinch))
+            let openPalm = Self.allFingersExtended(joints)
+            poses.append(HandPose(key: key, joints: joints, pinchPoint: pinchPoint,
+                                  pinch: pinch, openPalm: openPalm))
         }
 
         let stale = smoothed.keys.filter { !seen.contains($0) }
@@ -159,6 +161,22 @@ final class HandTracker {
         return poses
     }
 
+    /// Mano abierta: al menos 4 de los 5 dedos extendidos.
+    private static func allFingersExtended(_ joints: [VNHumanHandPoseObservation.JointName: CGPoint]) -> Bool {
+        guard let wrist = joints[.wrist] else { return false }
+        let pairs: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
+            (.thumbTip, .thumbCMC), (.indexTip, .indexMCP), (.middleTip, .middleMCP),
+            (.ringTip, .ringMCP), (.littleTip, .littleMCP)
+        ]
+        var extended = 0
+        for (tipName, mcpName) in pairs {
+            guard let tip = joints[tipName], let mcp = joints[mcpName] else { continue }
+            let tipDistance = hypot(tip.x - wrist.x, tip.y - wrist.y)
+            let mcpDistance = max(hypot(mcp.x - wrist.x, mcp.y - wrist.y), 1)
+            if tipDistance / mcpDistance > 1.25 { extended += 1 }
+        }
+        return extended >= 4
+    }
     /// Verdadero si al menos dos de los tres dedos restantes están extendidos.
     /// Evita clicks fantasma cuando la mano está cerrada.
     private func otherFingersRelaxed(_ joints: [VNHumanHandPoseObservation.JointName: CGPoint]) -> Bool {

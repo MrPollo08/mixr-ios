@@ -238,7 +238,11 @@ final class WindowHostView: UIView {
         window.pointsPerMeter = pointsPerMeter
         window.view.isHidden = false
         window.view.bounds = CGRect(origin: .zero, size: window.view.baseSize)
-        window.view.center = center
+        let previous = window.smoothedCenter ?? center
+        let smoothed = CGPoint(x: previous.x + (center.x - previous.x) * 0.35,
+                               y: previous.y + (center.y - previous.y) * 0.35)
+        window.smoothedCenter = smoothed
+        window.view.center = smoothed
 
         let targetWidth = window.physicalWidth * pointsPerMeter
         let scale = targetWidth / window.view.baseSize.width

@@ -370,6 +370,20 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         }
     }
 
+    /// Palma abierta: abre el menú si está cerrado, lo cierra si está abierto.
+    func toggleMenuWithPalm() {
+        if let menu = menuWindow, hostViewsContains(menu) {
+            hostView.remove(menu)
+            menuWindow = nil
+        } else {
+            summonMenu()
+        }
+    }
+
+    private func hostViewsContains(_ window: SpatialWindow) -> Bool {
+        hostView.windows.contains(where: { $0 === window })
+    }
+
     /// Doble pinza al aire: trae el menú delante de la cámara.
     func summonMenu() {
         ensureMenu()
@@ -522,7 +536,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         if cameraMode == .arkit, let frame = arSession.currentFrame, let basePose = pose {
             let correction = depthAxis.correction(depthMap: frame.sceneDepth?.depthMap,
                                                   cameraTransform: frame.camera.transform)
-            if let correction, abs(correction) > 0.04 {
+            if let correction, false, abs(correction) > 0.04 {
                 pose = basePose.moved(alongView: -correction)
             }
         }

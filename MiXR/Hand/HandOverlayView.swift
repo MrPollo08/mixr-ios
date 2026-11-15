@@ -1,51 +1,35 @@
 import UIKit
 import Vision
 
-/// Dibuja una **mano estilizada**: silueta oscura con borde blanco, más un
-/// cursor (línea + punto) que sale del dedo índice.
+/// Overlay de la mano **sin esqueleto**: nada de líneas, nada de malla.
 ///
-/// Es la representación que se ve encima de las pantallas: no usa los píxeles
-/// de la cámara, así que es liviana, no cuesta FPS y siempre se lee bien.
+/// Sólo se dibuja:
+///  - un punto sutil en la yema del índice (donde está el puntero),
+///  - y el botón ☰ en el centro de la palma cuando la mano está abierta.
 final class HandOverlayView: UIView {
 
-    private let edgeLayer = CAShapeLayer()
-    private let fillLayer = CAShapeLayer()
-    private let cursorLayer = CAShapeLayer()
+    private let dotLayer = CAShapeLayer()
+    private let palmButtonLayer = CAShapeLayer()
     private let pointerLayer = CAShapeLayer()
-
-    private static let palmNames: [VNHumanHandPoseObservation.JointName] = [
-        .wrist, .indexMCP, .middleMCP, .ringMCP, .littleMCP
-    ]
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
         isOpaque = false
 
-        // Borde blanco: se dibuja un trazo más grueso debajo.
-        edgeLayer.fillColor = UIColor.clear.cgColor
-        edgeLayer.strokeColor = UIColor.white.withAlphaComponent(0.85).cgColor
-        edgeLayer.lineWidth = 17
-        edgeLayer.lineCap = .round
-        edgeLayer.lineJoin = .round
+        dotLayer.fillColor = UIColor.white.withAlphaComponent(0.9).cgColor
+        dotLayer.strokeColor = UIColor.black.withAlphaComponent(0.35).cgColor
+        dotLayer.lineWidth = 1
 
-        // Relleno oscuro translúcido encima.
-        fillLayer.fillColor = UIColor.black.withAlphaComponent(0.55).cgColor
-        fillLayer.strokeColor = UIColor.black.withAlphaComponent(0.55).cgColor
-        fillLayer.lineWidth = 13
-        fillLayer.lineCap = .round
-        fillLayer.lineJoin = .round
+        palmButtonLayer.fillColor = UIColor(white: 0.15, alpha: 0.65).cgColor
+        palmButtonLayer.strokeColor = UIColor.white.withAlphaComponent(0.75).cgColor
+        palmButtonLayer.lineWidth = 2
 
-        cursorLayer.fillColor = UIColor.white.cgColor
-        cursorLayer.strokeColor = UIColor.white.withAlphaComponent(0.9).cgColor
-        cursorLayer.lineWidth = 2
-        cursorLayer.lineCap = .round
-
-        pointerLayer.fillColor = UIColor.white.withAlphaComponent(0.95).cgColor
-        pointerLayer.strokeColor = UIColor(red: 0.42, green: 0.86, blue: 1.0, alpha: 0.95).cgColor
+        pointerLayer.fillColor = UIColor.clear.cgColor
+        pointerLayer.strokeColor = UIColor.white.withAlphaComponent(0.9).cgColor
         pointerLayer.lineWidth = 2
 
-        for shape in [edgeLayer, fillLayer, cursorLayer, pointerLayer] {
+        for shape in [palmButtonLayer, dotLayer, pointerLayer] {
             layer.addSublayer(shape)
         }
     }
@@ -56,73 +40,53 @@ final class HandOverlayView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        for shape in [edgeLayer, fillLayer, cursorLayer, pointerLayer] {
+        for shape in [palmButtonLayer, dotLayer, pointerLayer] {
             shape.frame = bounds
         }
     }
 
-    /// Punto de puntería extra (modo control del PC).
+    /// Aro de puntería (modo control / hover sobre un botón).
     func setPointer(_ point: CGPoint?) {
         guard let point else {
             pointerLayer.path = nil
             return
         }
-        let radius: CGFloat = 12
-        let path = UIBezierPath(ovalIn: CGRect(x: point.x - radius, y: point.y - radius,
-                                               width: radius * 2, height: radius * 2))
-        pointerLayer.path = path.cgPath
+        let radius: CGFloat = 11
+        pointerLayer.path = UIBezierPath(ovalIn: CGRect(x: point.x - radius,
+                                                        y: point.y - radius,
+                                                        width: radius * 2,
+                                                        height: radius * 2)).cgPath
     }
 
     func render(poses: [HandPose]) {
-        let hand = UIBezierPath()
-        let cursor = UIBezierPath()
-
-        for pose in poses {
-            for chain in HandTracker.connections {
-                var started = false
-                for name in chain {
-                    guard let point = pose.joints[name] else { continue }
-                    if started {
-                        hand.addLine(to: point)
-                    } else {
-                        hand.move(to: point)
-                        started = true
-                    }
-                }
-            }
-
-            let palmPoints = Self.palmNames.compactMap { pose.joints[$0] }
-            if palmPoints.count >= 3 {
-                var started = false
-                for point in palmPoints {
-                    if started {
-                        hand.addLine(to: point)
-                    } else {
-                        hand.move(to: point)
-                        started = true
-                    }
-                }
-                hand.close()
-            }
+        // Punto en la yema del índice: todo el feedback que hace falta.
+        if let tip = poses.first?.joints[.indexTip] {
+            dotLayer.path = UIBezierPath(ovalIn: CGRect(x: tip.x - 4.5, y: tip.y - 4.5,
+                                                        width: 9, height: 9)).cgPath
+        } else {
+            dotLayer.path = nil
         }
 
-        // Cursor: línea desde el dedo índice hacia donde apunta + punto.
-        if let pose = poses.first,
-           let tip = pose.joints[.indexTip] {
-            let base = pose.joints[.indexMCP] ?? pose.joints[.wrist] ?? tip
-            let dx = tip.x - base.x
-            let dy = tip.y - base.y
-            let length = max(hypot(dx, dy), 1)
-            let end = CGPoint(x: tip.x + dx / length * 52, y: tip.y + dy / length * 52)
+        // ☰ en la palma, sólo con la mano abierta.
+        if let open = poses.first(where: { $0.openPalm }),
+           let wrist = open.joints[.wrist],
+           let middle = open.joints[.middleMCP] {
+            let center = CGPoint(x: (wrist.x + middle.x) / 2,
+                                 y: (wrist.y + middle.y) / 2)
+            let radius = max(22, min(34, hypot(wrist.x - middle.x, wrist.y - middle.y) * 0.85))
 
-            cursor.move(to: tip)
-            cursor.addLine(to: end)
-            cursor.append(UIBezierPath(ovalIn: CGRect(x: end.x - 5, y: end.y - 5,
-                                                      width: 10, height: 10)))
+            let path = UIBezierPath(ovalIn: CGRect(x: center.x - radius, y: center.y - radius,
+                                                   width: radius * 2, height: radius * 2))
+
+            let barWidth = radius * 0.9
+            for offset in [-0.28, 0.0, 0.28] {
+                let y = center.y + CGFloat(offset) * radius
+                path.move(to: CGPoint(x: center.x - barWidth / 2, y: y))
+                path.addLine(to: CGPoint(x: center.x + barWidth / 2, y: y))
+            }
+            palmButtonLayer.path = path.cgPath
+        } else {
+            palmButtonLayer.path = nil
         }
-
-        edgeLayer.path = hand.cgPath
-        fillLayer.path = hand.cgPath
-        cursorLayer.path = cursor.cgPath
     }
 }

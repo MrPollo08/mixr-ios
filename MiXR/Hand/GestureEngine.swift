@@ -39,6 +39,10 @@ final class GestureEngine {
     /// Se dispara con **doble pinza al aire** (sin tocar ninguna ventana):
     /// sirve para traer el menú cuando se perdió de vista.
     var onSummon: (() -> Void)?
+    /// Palma abierta mantenida: abre o cierra el menú.
+    var onPalm: (() -> Void)?
+    private var palmSince: CFTimeInterval = 0
+    private var palmFired = false
 
     private var lastTapAt: CFTimeInterval = 0
     private var lastTapPoint: CGPoint?
@@ -93,6 +97,18 @@ final class GestureEngine {
         }
 
         // 2. Sin ventana agarrada: resaltar el menú y ver si la pinza cae en algo.
+        // Palma abierta 0.7 s => abre o cierra el menú.
+        if grabbed == nil, poses.contains(where: { $0.openPalm }) {
+            if palmSince == 0 { palmSince = now }
+            if !palmFired, now - palmSince > 0.7 {
+                palmFired = true
+                onPalm?()
+            }
+        } else {
+            palmSince = 0
+            palmFired = false
+        }
+
         guard let window = grabbed else {
             updateHover(poses: poses, host: host)
             if let first = pinching.first, let target = host.window(at: dragPoint(first)) {
