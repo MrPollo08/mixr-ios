@@ -66,12 +66,12 @@ final class WindowHostView: UIView {
         }
 
         if let pressable = content as? SpatialPressable {
-            window.pressAt = { [weak self, weak menu, weak view] point in
-                guard let self, let menu, let view else { return false }
+            window.pressAt = { [weak self, weak pressable, weak view] point in
+                guard let self, let pressable, let view else { return false }
                 return pressable.press(atLocal: view.convert(point, from: self))
             }
-            window.hoverAt = { [weak self, weak menu, weak view] point, dt in
-                guard let self, let menu, let view else { return }
+            window.hoverAt = { [weak self, weak pressable, weak view] point, dt in
+                guard let self, let pressable, let view else { return }
                 guard let point else {
                     pressable.updatePointer(atLocal: nil, dt: dt)
                     return
