@@ -6,18 +6,21 @@ import simd
 
 /// Pose de cámara unificada, ya expresada en el marco de la **pantalla**.
 ///
-/// Sirve para los tres caminos: ARKit con su cámara, ARKit con la ultra gran
-/// angular (6DoF + más campo) y gran angular con CoreMotion (3DoF).
+/// Para ARKit la proyección la hace **Apple** (`ARCamera.projectPoint`), que es
+/// la que usa ARSCNView para dibujar el mundo: es la única forma de que las
+/// ventanas y el fondo coincidan exactamente al mover la cámara.
 struct CameraPose {
 
     /// Cámara → mundo, con x derecha, y arriba, z hacia atrás (mira a -z).
     let transform: simd_float4x4
-    /// Distancias focales en puntos de pantalla (x e y pueden diferir en ARKit).
     let focalX: CGFloat
     let focalY: CGFloat
     let viewport: CGSize
-    /// ancho / alto de la imagen ya parada (para mapear los puntos de Vision).
     let imageAspect: CGFloat
+
+    /// Cámara de ARKit (si existe) y orientación de la interfaz.
+    let arkitCamera: ARCamera?
+    let orientation: UIInterfaceOrientation
 
     struct Projection {
         let center: CGPoint
@@ -26,23 +29,37 @@ struct CameraPose {
     }
 
     func project(_ world: simd_float3) -> Projection? {
-        guard viewport.width > 1, viewport.height > 1, focalX > 1, focalY > 1 else { return nil }
+        guard viewport.width > 1, viewport.height > 1 else { return nil }
 
         let inCamera = simd_inverse(transform) * simd_float4(world, 1)
         let depth = -inCamera.z
         guard depth > Config.minDepth, depth < Config.maxDepth else { return nil }
 
+        let pointsPerMeter = ((focalX + focalY) / 2) / CGFloat(depth)
+
+        // Camino principal: la proyección de Apple (idéntica al fondo de ARKit).
+        if let arkitCamera {
+            let projected = arkitCamera.projectPoint(world,
+                                                     orientation: orientation,
+                                                     viewportSize: viewport)
+            guard projected.x.isFinite, projected.y.isFinite else { return nil }
+            return Projection(center: CGPoint(x: CGFloat(projected.x), y: CGFloat(projected.y)),
+                              pointsPerMeter: pointsPerMeter,
+                              depth: depth)
+        }
+
+        // Respaldo (modos sin ARKit).
+        guard focalX > 1, focalY > 1 else { return nil }
         let x = viewport.width / 2 + CGFloat(inCamera.x) / CGFloat(depth) * focalX
         let y = viewport.height / 2 - CGFloat(inCamera.y) / CGFloat(depth) * focalY
-
         return Projection(center: CGPoint(x: x, y: y),
-                          pointsPerMeter: ((focalX + focalY) / 2) / CGFloat(depth),
+                          pointsPerMeter: pointsPerMeter,
                           depth: depth)
     }
 
     // MARK: - Constructores
 
-    /// ARKit con su cámara: usa la proyección propia de la cámara (6DoF).
+    /// ARKit con su cámara: proyección de Apple (6DoF).
     init(arkitCamera camera: ARCamera,
          orientation: UIInterfaceOrientation,
          viewport: CGSize,
@@ -53,10 +70,11 @@ struct CameraPose {
         self.focalY = CGFloat(camera.projectionMatrix.columns.1.y) * viewport.height / 2
         self.viewport = viewport
         self.imageAspect = ScreenOrientation.displayAspect(raw: imageSize, orientation: orientation)
+        self.arkitCamera = camera
+        self.orientation = orientation
     }
 
-    /// Pose de ARKit (6DoF) pero con la imagen de la **ultra gran angular**.
-    /// Anclaje real + mucho más campo de visión.
+    /// Pose de ARKit pero con una imagen de otro campo de visión.
     init(cameraTransform: simd_float4x4,
          orientation: UIInterfaceOrientation,
          viewport: CGSize,
@@ -73,6 +91,8 @@ struct CameraPose {
         self.focalY = focalPixels * fill
         self.viewport = viewport
         self.imageAspect = display.width / display.height
+        self.arkitCamera = nil
+        self.orientation = orientation
     }
 
     /// Gran angular sin ARKit: rotación de CoreMotion (3DoF).
@@ -92,5 +112,7 @@ struct CameraPose {
         self.focalY = focalPixels * fill
         self.viewport = viewport
         self.imageAspect = display.width / display.height
+        self.arkitCamera = nil
+        self.orientation = orientation
     }
 }

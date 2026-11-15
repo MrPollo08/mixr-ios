@@ -13,6 +13,11 @@ final class WindowHostView: UIView {
     private(set) var windows: [SpatialWindow] = []
     private(set) var lastPose: CameraPose?
 
+    /// Proyector provisto por quien dibuja el fondo (SceneKit): devuelve el
+    /// centro en pantalla y los puntos por metro de un punto del mundo.
+    /// Usar el mismo motor que el fondo evita cualquier desincronización.
+    var worldToScreen: ((simd_float3) -> (center: CGPoint, pointsPerMeter: CGFloat)?)?
+
     private var pinchStartWidth: CGFloat = 0
 
     override init(frame: CGRect) {
@@ -193,12 +198,23 @@ final class WindowHostView: UIView {
             return
         }
 
-        window.pointsPerMeter = projection.pointsPerMeter
+        // Preferimos la proyección del renderer del fondo (SceneKit).
+        var center = projection.center
+        var pointsPerMeter = projection.pointsPerMeter
+        if let projector = worldToScreen,
+           let rendered = projector(window.position),
+           rendered.pointsPerMeter.isFinite, rendered.pointsPerMeter > 0.1,
+           rendered.center.x.isFinite, rendered.center.y.isFinite {
+            center = rendered.center
+            pointsPerMeter = rendered.pointsPerMeter
+        }
+
+        window.pointsPerMeter = pointsPerMeter
         window.view.isHidden = false
         window.view.bounds = CGRect(origin: .zero, size: window.view.baseSize)
-        window.view.center = projection.center
+        window.view.center = center
 
-        let targetWidth = window.physicalWidth * projection.pointsPerMeter
+        let targetWidth = window.physicalWidth * pointsPerMeter
         let scale = targetWidth / window.view.baseSize.width
         window.view.transform = CGAffineTransform(scaleX: scale, y: scale)
 

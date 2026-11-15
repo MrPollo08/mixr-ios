@@ -3,6 +3,7 @@ import AVFoundation
 import Combine
 import CoreVideo
 import PhotosUI
+import SceneKit
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -410,6 +411,36 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
         guard let pose else { return }
         lastPose = pose
+
+        // El proyector sale del renderer del fondo: mismas matemáticas que la
+        // imagen de la cámara, así la ventana no puede "nadar" al moverte.
+        if cameraMode == .arkit, arSession.currentFrame != nil {
+            let cameraTransform = pose.transform
+            let rightColumn = cameraTransform.columns.0
+            let right = simd_float3(rightColumn.x, rightColumn.y, rightColumn.z)
+
+            hostView.worldToScreen = { [weak self] world in
+                guard let self else { return nil }
+                let scene = self.sceneView
+                let point = scene.projectPoint(SCNVector3(x: CGFloat(world.x),
+                                                          y: CGFloat(world.y),
+                                                          z: CGFloat(world.z)))
+                guard point.x.isFinite, point.y.isFinite else { return nil }
+
+                let meter = world + right
+                let offset = scene.projectPoint(SCNVector3(x: CGFloat(meter.x),
+                                                           y: CGFloat(meter.y),
+                                                           z: CGFloat(meter.z)))
+                let pointsPerMeter = hypot(CGFloat(offset.x - point.x),
+                                           CGFloat(offset.y - point.y))
+                guard pointsPerMeter.isFinite, pointsPerMeter > 0.1 else { return nil }
+
+                return (CGPoint(x: CGFloat(point.x), y: CGFloat(point.y)), pointsPerMeter)
+            }
+        } else {
+            hostView.worldToScreen = nil
+        }
+
         hostView.layout(pose: pose)
 
         // El menú se crea recién cuando ya hay una pose real de ARKit, así su
@@ -452,13 +483,14 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
 
         let camera = frame.camera.transform.columns.3
         let menu = menuWindow?.position ?? simd_float3.zero
-        let text = String(format: "%@ %@ %dfps w%d  c %.2f,%.2f  m %.2f,%.2f",
+        let screen = lastPose?.project(menu)?.center ?? .zero
+        let text = String(format: "%@ %@ %dfps  c %.2f,%.2f  m %.2f,%.2f  s %.0f,%.0f",
                           usingUltraWide ? "0.5x" : "1x",
                           tracking,
                           Int(smoothedFPS),
-                          hostView.windows.count,
                           Double(camera.x), Double(camera.z),
-                          Double(menu.x), Double(menu.z))
+                          Double(menu.x), Double(menu.z),
+                          Double(screen.x), Double(screen.y))
         debugText = text
     }
 
