@@ -162,7 +162,12 @@ final class WindowHostView: UIView {
         window.view.center
     }
 
-    func setPosition(_ window: SpatialWindow, _ position: simd_float3) {
+    /// Sólo un arrastre activo (o un recentrado explícito) puede mover una
+    /// ventana. Cualquier otra escritura se descarta: garantiza world-lock.
+    var allowsPositionWrites = false
+
+    func setPosition(_ window: SpatialWindow, _ position: simd_float3, force: Bool = false) {
+        guard force || allowsPositionWrites else { return }
         window.position = position
         layoutWindow(window)
     }

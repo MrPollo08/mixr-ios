@@ -243,7 +243,13 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         case .arkit:
             let configuration = ARWorldTrackingConfiguration()
             configuration.worldAlignment = .gravity
-            configuration.planeDetection = []
+            configuration.planeDetection = [.horizontal]
+
+            // LiDAR: malla del entorno. Sin esto, en paredes lisas ARKit queda
+            // en 'limited' y pierde la traslación (la ventana te sigue en Z).
+            if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
+                configuration.sceneReconstruction = .meshWithClassification
+            }
             configuration.isLightEstimationEnabled = false
             configuration.environmentTexturing = .none
 
@@ -393,7 +399,7 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         let position = positionInFrontOfCamera(index: 0,
                                                distance: Config.menuDistance,
                                                transform: transform)
-        hostView.setPosition(menu, position)
+        hostView.setPosition(menu, position, force: true)
         hostView.bringToFront(menu)
     }
 
@@ -581,6 +587,8 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         overlay.render(poses: poses)
         if handCount != poses.count { handCount = poses.count }
 
+        hostView.allowsPositionWrites = gestures.isDragging
+
         if controlMode {
             // Si el dedo está sobre el menú, el gesto es del menú y no del PC.
             if let tip = poses.first.map({ $0.joints[.indexTip] ?? $0.pinchPoint }),
@@ -753,6 +761,8 @@ final class XRSession: NSObject, ObservableObject, PHPickerViewControllerDelegat
         pointer.setEnabled(controlMode)
         gestures.reset()
         overlay.setPointer(nil)
+
+        hostView.allowsPositionWrites = gestures.isDragging
 
         if controlMode {
             if let host = pcHost {
