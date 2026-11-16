@@ -34,7 +34,7 @@ final class HandGhostView: UIView {
 
     private static let outputScale: CGFloat = 0.5
     private static let maskScale: CGFloat = 0.45
-    private static let maxSegmentationRate: CFTimeInterval = 1.0 / 30.0
+    private static let maxSegmentationRate: CFTimeInterval = 1.0 / 15.0
     private static let maxRenderRate: CFTimeInterval = 1.0 / 60.0
 
     private let imageLayer = CALayer()
@@ -80,7 +80,9 @@ final class HandGhostView: UIView {
         imageLayer.minificationFilter = .linear
         layer.addSublayer(imageLayer)
 
-        segmentation.qualityLevel = .balanced
+        // Calidad alta: el contorno tiene que seguir de verdad el borde de la mano.
+        // A 12 Hz alcanza y el costo queda acotado.
+        segmentation.qualityLevel = .accurate
         segmentation.outputPixelFormat = kCVPixelFormatType_OneComponent8
     }
 
@@ -215,36 +217,28 @@ final class HandGhostView: UIView {
 
         let framed = aspectFill(source, into: rect)
 
-        // --- Máscara: segmentación de persona ∪ silueta geométrica ---
+        // --- Máscara ---
+        // Si la segmentación encuentra la persona, se usa **sólo ella**: es la forma real
+        // de la mano y del antebrazo. Unirla con la silueta geométrica (cápsulas) hacía
+        // que ganaran las cápsulas, con dedos rectos y todos del mismo ancho.
         var mask: CIImage?
-        // Si la segmentación no encuentra persona (cobertura ~0), su máscara no aporta
-        // nada: sólo se dibujaría la silueta geométrica, con dedos rígidos y anchos
-        // iguales. En ese caso se ignora y queda el respaldo geométrico puro.
         let personIsUsable = personMask != nil && maskCoverage > 0.008
 
         if let personMask, personIsUsable {
             var person = CIImage(cvPixelBuffer: personMask).oriented(forExifOrientation: exif)
             person = person.transformed(by: CGAffineTransform(translationX: -person.extent.origin.x,
                                                               y: -person.extent.origin.y))
+            // Cerrar huecos chicos y suavizar el borde del modelo.
             mask = aspectFill(person, into: rect)
-                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 1.5])
+                .applyingFilter("CIMorphologyMaximum", parameters: [kCIInputRadiusKey: 1.4])
+                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 2.2])
                 .cropped(to: rect)
-        }
-
-        if let geometric = geometricMask(hands: hands, size: size) {
-            let geometricImage = CIImage(cgImage: geometric)
+        } else if let geometric = geometricMask(hands: hands, size: size) {
+            mask = CIImage(cgImage: geometric)
                 .transformed(by: CGAffineTransform(scaleX: 1 / Self.maskScale,
                                                    y: 1 / Self.maskScale))
-                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 2.0])
+                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 2.4])
                 .cropped(to: rect)
-
-            if let current = mask {
-                mask = current.applyingFilter("CIMaximumComposition", parameters: [
-                    kCIInputBackgroundImageKey: geometricImage
-                ])
-            } else {
-                mask = geometricImage
-            }
         }
 
         guard var finalMask = mask else { return nil }
