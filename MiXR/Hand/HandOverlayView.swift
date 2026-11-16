@@ -179,13 +179,13 @@ final class HandOverlayView: UIView {
             armDir = normalizePoint(CGPoint(x: wrist.x - middleMCP.x, y: wrist.y - middleMCP.y),
                                     fallback: CGPoint(x: 0, y: 1))
         }
-        let armLength = max(hypot(pose.forearm.elbow2D.x - wrist.x,
-                                  pose.forearm.elbow2D.y - wrist.y), scale * 1.2)
+        let armLength = min(max(hypot(pose.forearm.elbow2D.x - wrist.x,
+                                      pose.forearm.elbow2D.y - wrist.y), scale * 0.9), scale * 1.6)
         let elbow = CGPoint(x: wrist.x + armDir.x * armLength,
                             y: wrist.y + armDir.y * armLength)
 
         addCapsule(to: path, from: wrist, to: elbow,
-                   rA: scale * 0.330, rB: scale * 0.395)
+                   rA: scale * 0.300, rB: scale * 0.330)
 
         let hullNames: [VNHumanHandPoseObservation.JointName] = [
             .wrist, .thumbCMC, .indexMCP, .middleMCP, .ringMCP, .littleMCP
@@ -208,6 +208,20 @@ final class HandOverlayView: UIView {
             guard let a = joints[fromName], let b = joints[toName] else { continue }
             addCapsule(to: path, from: a, to: b,
                        rA: scale * radius, rB: scale * radius * 0.94)
+        }
+
+        // Membranas interdigitales: rellenan los huecos entre los dedos, que es lo que
+        // hacía que la mano se viera como palitos separados en vez de una mano.
+        let webs: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName, CGFloat)] = [
+            (.indexPIP, .middlePIP, 0.135),
+            (.middlePIP, .ringPIP, 0.135),
+            (.ringPIP, .littlePIP, 0.118),
+            (.thumbMP, .indexPIP, 0.115)
+        ]
+        for (fromName, toName, radius) in webs {
+            guard let a = joints[fromName], let b = joints[toName] else { continue }
+            addCapsule(to: path, from: a, to: b,
+                       rA: scale * radius, rB: scale * radius)
         }
 
         let orderedBones = pose.bones3D.sorted { $0.depthMeters > $1.depthMeters }
@@ -241,8 +255,8 @@ final class HandOverlayView: UIView {
             armDir = Self.normalizePoint(CGPoint(x: wrist.x - middleMCP.x, y: wrist.y - middleMCP.y),
                                         fallback: CGPoint(x: 0, y: 1))
         }
-        let armLength = max(hypot(pose.forearm.elbow2D.x - wrist.x,
-                                  pose.forearm.elbow2D.y - wrist.y), scale * 1.2)
+        let armLength = min(max(hypot(pose.forearm.elbow2D.x - wrist.x,
+                                      pose.forearm.elbow2D.y - wrist.y), scale * 0.9), scale * 1.6)
 
         // --- Desvanecido del antebrazo ---
         let w = max(bounds.width, 1)
