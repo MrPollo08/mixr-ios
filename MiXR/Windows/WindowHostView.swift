@@ -263,12 +263,14 @@ final class WindowHostView: UIView {
         let halfHeight = halfWidth * Float(base.height / base.width)
         let p = window.position
 
-        let corners3D = [
-            p + right * (-halfWidth) + up * halfHeight,
-            p + right * halfWidth + up * halfHeight,
-            p + right * halfWidth + up * (-halfHeight),
-            p + right * (-halfWidth) + up * (-halfHeight)
-        ]
+        let offsetRight: simd_float3 = right * halfWidth
+        let offsetUp: simd_float3 = up * halfHeight
+
+        let topLeft = p - offsetRight + offsetUp
+        let topRight = p + offsetRight + offsetUp
+        let bottomRight = p + offsetRight - offsetUp
+        let bottomLeft = p - offsetRight - offsetUp
+        let corners3D: [simd_float3] = [topLeft, topRight, bottomRight, bottomLeft]
 
         var quad: [CGPoint] = []
         quad.reserveCapacity(4)
