@@ -36,6 +36,8 @@ final class GamepadController {
     var onSecondary: (() -> Void)?
     /// Botón X: alternar autofoco.
     var onTertiary: (() -> Void)?
+    /// Botón Y: modo captura de datos.
+    var onQuaternary: (() -> Void)?
 
     init() {
         NotificationCenter.default.addObserver(forName: .GCControllerDidConnect,
@@ -64,11 +66,15 @@ final class GamepadController {
         let tertiary: (GCControllerButtonInput, Float, Bool) -> Void = { [weak self] _, _, pressed in
             if pressed { self?.onTertiary?() }
         }
+        let quaternary: (GCControllerButtonInput, Float, Bool) -> Void = { [weak self] _, _, pressed in
+            if pressed { self?.onQuaternary?() }
+        }
 
         if let pad = controller.extendedGamepad {
             pad.buttonA.pressedChangedHandler = primary
             pad.buttonB.pressedChangedHandler = secondary
             pad.buttonX.pressedChangedHandler = tertiary
+            pad.buttonY.pressedChangedHandler = quaternary
         } else if let pad = controller.gamepad {
             pad.buttonA.pressedChangedHandler = primary
             pad.buttonB.pressedChangedHandler = secondary

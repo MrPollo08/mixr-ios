@@ -87,6 +87,12 @@ final class XRSession: NSObject, ObservableObject {
     private let input = InputClient()
     private let gamepad = GamepadController()
 
+    // Captura de datos para entrenar el clasificador de gestos.
+    private let recorder = GestureDatasetRecorder()
+    private lazy var datasetServer = DatasetHTTPServer(recorder: recorder)
+    private let volumeButtons = VolumeButtons()
+    @Published var captureMode = false
+
     private var displayLink: CADisplayLink?
     private var isRunning = false
     private var arStarted = false
@@ -185,6 +191,38 @@ final class XRSession: NSObject, ObservableObject {
         toggleHandVisual()
     }
 
+    // MARK: - Modo captura (dataset de gestos)
+
+    /// Entra o sale del modo captura. Mientras está activo se puede etiquetar y grabar
+    /// con los botones de volumen o con el mando, sin tocar la pantalla.
+    func toggleCaptureMode() {
+        captureMode.toggle()
+
+        if captureMode {
+            datasetServer.start()
+            volumeButtons.start(onUp: { [weak self] in self?.recorder.nextLabel() },
+                                onDown: { [weak self] in self?.recorder.toggleRecording() })
+            handleCaptureControls()
+        } else {
+            if recorder.isRecording { recorder.stop() }
+            volumeButtons.stop()
+            datasetServer.stop()
+            restoreNormalControls()
+        }
+    }
+
+    private func handleCaptureControls() {
+        guard captureMode else { return }
+        // Mando: A = grabar/parar, B = siguiente etiqueta.
+        gamepad.onPrimary = { [weak self] in self?.recorder.toggleRecording() }
+        gamepad.onSecondary = { [weak self] in self?.recorder.nextLabel() }
+    }
+
+    private func restoreNormalControls() {
+        gamepad.onPrimary = { [weak self] in self?.connectPC() }
+        gamepad.onSecondary = { [weak self] in self?.centerWindows() }
+    }
+
     /// Si la mano fantasma no logra dibujar nada durante ~1,5 s aunque haya mano
     /// detectada, se enciende la malla sintética como respaldo. Cuando el recorte
     /// vuelve, se apaga sola.
@@ -225,6 +263,7 @@ final class XRSession: NSObject, ObservableObject {
         gamepad.onPrimary = { [weak self] in self?.connectPC() }
         gamepad.onSecondary = { [weak self] in self?.centerWindows() }
         gamepad.onTertiary = { [weak self] in self?.toggleAutofocus() }
+        gamepad.onQuaternary = { [weak self] in self?.toggleCaptureMode() }
         gestures.onEvent = { [weak self] event in self?.handle(event) }
         loadVRSettings()
     }
@@ -639,6 +678,11 @@ final class XRSession: NSObject, ObservableObject {
         lastHands = poses
         if handCount != poses.count { handCount = poses.count }
 
+        // Captura para entrenamiento: se graba la muestra cruda de este frame.
+        if captureMode, let hand = poses.first {
+            recorder.capture(hand: hand, now: CACurrentMediaTime())
+        }
+
         // Primera vez que aparece la mano: dejar que el autofoco la encuentre y congelarlo.
         if !poses.isEmpty, !autoFocusLockScheduled {
             autoFocusLockScheduled = true
@@ -728,6 +772,14 @@ final class XRSession: NSObject, ObservableObject {
 
         if debugText != text { debugText = text }
         if startedAt == 0 { startedAt = now }
+
+        if captureMode {
+            var extra = "\n" + recorder.statusText
+            if let ip = LocalIP.wifiAddress() {
+                extra += "\nhttp://\(ip):47320/dataset.csv"
+            }
+            if debugText != text + extra { debugText = text + extra }
+        }
     }
 
     // MARK: - Predicción de movimiento
