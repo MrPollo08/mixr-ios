@@ -31,10 +31,26 @@ final class GestureClassifier {
         lastConfidence = 0
     }
 
+    /// Verificación de integridad de los pesos generados. Si alguien regenera el modelo
+    /// y los tamaños no coinciden, esto evita un crash por índice fuera de rango.
+    private static let modelIsValid: Bool = {
+        let f = GestureModel.featureCount
+        let h = GestureModel.hiddenCount
+        let k = GestureModel.classCount
+        return GestureModel.mean.count == f
+            && GestureModel.std.count == f
+            && GestureModel.w1.count == f * h
+            && GestureModel.b1.count == h
+            && GestureModel.w2.count == h * k
+            && GestureModel.b2.count == k
+    }()
+
     /// Evalúa una muestra. Devuelve el gesto con más probabilidad (suavizado).
     @discardableResult
     func classify(features: [Float]) -> GestureLabel {
-        guard features.count == GestureModel.featureCount else { return lastGesture }
+        guard features.count == GestureModel.featureCount, Self.modelIsValid else {
+            return lastGesture
+        }
 
         let probabilities = forward(features)
 
