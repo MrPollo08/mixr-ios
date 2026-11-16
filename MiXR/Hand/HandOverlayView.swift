@@ -1,15 +1,15 @@
-import QuartzCore
+﻿import QuartzCore
 import UIKit
 import Vision
 import simd
 
 /// Capa de renderizado Overlay (`zPosition = 1000`): **malla de mano + antebrazo**.
 ///
-/// El dibujo es un **único contorno cerrado** (perímetro real de la silueta), tal como
-/// en la referencia: relleno translúcido oscuro, línea fina clara por fuera, muescas
+/// El dibujo es un **Ãºnico contorno cerrado** (perÃ­metro real de la silueta), tal como
+/// en la referencia: relleno translÃºcido oscuro, lÃ­nea fina clara por fuera, muescas
 /// en V entre los dedos y continuidad hacia el antebrazo que se desvanece en el brazo.
 ///
-/// Al ser un solo polígono no hay líneas internas, ni parches de distinta opacidad,
+/// Al ser un solo polÃ­gono no hay lÃ­neas internas, ni parches de distinta opacidad,
 /// ni costuras entre falanges: el relleno es uniforme y el borde, continuo.
 final class HandOverlayView: UIView {
 
@@ -17,9 +17,9 @@ final class HandOverlayView: UIView {
         let container = CALayer()
         let wristMask = CAGradientLayer()
 
-        /// Relleno translúcido de toda la silueta.
+        /// Relleno translÃºcido de toda la silueta.
         let fillLayer = CAShapeLayer()
-        /// Línea fina exterior (contorno).
+        /// LÃ­nea fina exterior (contorno).
         let outlineLayer = CAShapeLayer()
         /// Sombra suave: da profundidad (la mano "flota" sobre el escenario).
         let shadowLayer = CAShapeLayer()
@@ -177,7 +177,7 @@ final class HandOverlayView: UIView {
         let scale = min(max(pose.palmScale, 16), 320)
 
         // Eje "hacia el pulgar" (radial) en pantalla: sirve para separar el lado
-        // pulgar y el lado meñique sin importar cómo esté rotada la mano.
+        // pulgar y el lado meÃ±ique sin importar cÃ³mo estÃ© rotada la mano.
         var radial = CGPoint(x: 1, y: 0)
         if let index = joints[.indexMCP], let little = joints[.littleMCP] {
             let dx = index.x - little.x
@@ -193,12 +193,12 @@ final class HandOverlayView: UIView {
         }
         let ulnar = CGPoint(x: -radial.x, y: -radial.y)
 
-        // Dirección del antebrazo: muñeca → codo (Arm Tracking).
+        // DirecciÃ³n del antebrazo: muÃ±eca â†’ codo (Arm Tracking).
         var armDir = pose.forearm.direction2D
         let armLen = max(hypot(pose.forearm.elbow2D.x - wrist.x,
                                pose.forearm.elbow2D.y - wrist.y), scale * 1.1)
 
-        // Si el codo quedó degenerado, usar la dirección anatómica nudillos → muñeca.
+        // Si el codo quedÃ³ degenerado, usar la direcciÃ³n anatÃ³mica nudillos â†’ muÃ±eca.
         if !armDir.x.isFinite || !armDir.y.isFinite || (armDir.x == 0 && armDir.y == 0) {
             let dx = wrist.x - middleMCP.x
             let dy = wrist.y - middleMCP.y
@@ -208,17 +208,17 @@ final class HandOverlayView: UIView {
 
         var contour: [CGPoint] = []
 
-        // ---- 1. Borde cubital de la palma: muñeca → meñique ----
-        let wristRadius = scale * 0.385
+        // ---- 1. Borde cubital de la palma: muÃ±eca â†’ meÃ±ique ----
+        let wristRadius = scale * 0.340
         let ulnarStart = offset(wrist, ulnar, wristRadius)
         contour.append(ulnarStart)
 
         if let little = joints[.littleMCP] {
             let midPalm = CGPoint(x: (wrist.x + little.x) * 0.5, y: (wrist.y + little.y) * 0.5)
-            contour.append(offset(midPalm, ulnar, scale * 0.41))
+            contour.append(offset(midPalm, ulnar, scale * 0.450))
         }
 
-        // ---- 2. Dedos, de meñique a pulgar (pulgar desde el MP: la base es la tenar) ----
+        // ---- 2. Dedos, de meÃ±ique a pulgar (pulgar desde el MP: la base es la tenar) ----
         let chains: [(finger: Int, names: [VNHumanHandPoseObservation.JointName])] = [
             (4, [.littleMCP, .littlePIP, .littleDIP, .littleTip]),
             (3, [.ringMCP, .ringPIP, .ringDIP, .ringTip]),
@@ -228,8 +228,8 @@ final class HandOverlayView: UIView {
         ]
 
         // Recorrido: sube por el lado cubital del dedo, rodea la yema y baja por el radial.
-        // Entre dedo y dedo se inserta una única muesca en V que sale del punto anterior
-        // y entra en el borde del siguiente: así el contorno nunca se cruza.
+        // Entre dedo y dedo se inserta una Ãºnica muesca en V que sale del punto anterior
+        // y entra en el borde del siguiente: asÃ­ el contorno nunca se cruza.
         var previousPoint = contour[contour.count - 1]
         for chain in chains {
             let pts = chain.names.compactMap { joints[$0] }
@@ -254,26 +254,26 @@ final class HandOverlayView: UIView {
             previousPoint = contour[contour.count - 1]
         }
 
-        // ---- 3. Eminencia tenar y borde radial de la palma: pulgar → muñeca ----
+        // ---- 3. Eminencia tenar y borde radial de la palma: pulgar â†’ muÃ±eca ----
         if let cmc = joints[.thumbCMC] {
-            contour.append(offset(cmc, radial, scale * 0.255))
+            contour.append(offset(cmc, radial, scale * 0.175))
             let midThenar = CGPoint(x: (cmc.x + wrist.x) * 0.5, y: (cmc.y + wrist.y) * 0.5)
-            contour.append(offset(midThenar, radial, scale * 0.395))
+            contour.append(offset(midThenar, radial, scale * 0.345))
         }
         let radialStart = offset(wrist, radial, wristRadius)
         contour.append(radialStart)
 
         // ---- 4. Antebrazo: baja por el radial, rodea el extremo y sube por el cubital ----
         let elbow = CGPoint(x: wrist.x + armDir.x * armLen, y: wrist.y + armDir.y * armLen)
-        let armRadius = scale * 0.40
+        let armRadius = scale * 0.400
 
         let radialCapPoint = offset(elbow, radial, armRadius)
         let ulnarCapPoint = offset(elbow, ulnar, armRadius)
 
         appendLine(&contour, from: radialStart, to: radialCapPoint, steps: 3)
 
-        // Extremo del brazo: arco que abomba en la dirección del antebrazo
-        // (queda prácticamente invisible por el fade de la máscara).
+        // Extremo del brazo: arco que abomba en la direcciÃ³n del antebrazo
+        // (queda prÃ¡cticamente invisible por el fade de la mÃ¡scara).
         appendArc(&contour,
                   center: elbow,
                   radius: armRadius,
@@ -294,7 +294,7 @@ final class HandOverlayView: UIView {
         for i in 1..<ordered.count { path.addLine(to: ordered[i]) }
         path.closeSubpath()
 
-        // Máscara de desvanecido a lo largo del antebrazo (de la muñeca hacia el codo).
+        // MÃ¡scara de desvanecido a lo largo del antebrazo (de la muÃ±eca hacia el codo).
         let w = max(bounds.width, 1)
         let h = max(bounds.height, 1)
         let maskFrom = CGPoint(x: wrist.x - armDir.x * (scale * 0.55),
@@ -304,7 +304,7 @@ final class HandOverlayView: UIView {
         group.wristMask.startPoint = CGPoint(x: maskFrom.x / w, y: maskFrom.y / h)
         group.wristMask.endPoint = CGPoint(x: maskTo.x / w, y: maskTo.y / h)
 
-        // Grosor del contorno según profundidad real (más cerca = línea algo más marcada).
+        // Grosor del contorno segÃºn profundidad real (mÃ¡s cerca = lÃ­nea algo mÃ¡s marcada).
         let depthFactor = CGFloat(min(max(0.65 / max(CGFloat(pose.depthMeters), 0.10), 0.75), 1.8))
         group.outlineLayer.lineWidth = 1.55 * depthFactor
         group.outlineLayer.strokeColor = UIColor(white: 0.93, alpha: 0.92).cgColor
@@ -315,7 +315,7 @@ final class HandOverlayView: UIView {
         group.fillLayer.shadowOpacity = 0.0
         group.outlineLayer.path = path
 
-        // Sombra de contacto desplazada: sensación de volumen sobre el escenario.
+        // Sombra de contacto desplazada: sensaciÃ³n de volumen sobre el escenario.
         let shadowPath = CGMutablePath()
         shadowPath.addPath(path, transform: CGAffineTransform(translationX: 3, y: 6))
         group.shadowLayer.path = shadowPath
@@ -342,7 +342,7 @@ final class HandOverlayView: UIView {
         return radii
     }
 
-    /// Añade al contorno un dedo completo: lado de entrada → punta redondeada → lado de salida.
+    /// AÃ±ade al contorno un dedo completo: lado de entrada â†’ punta redondeada â†’ lado de salida.
     private func appendFinger(contour: inout [CGPoint],
                               points: [CGPoint],
                               radii: [CGFloat],
@@ -359,12 +359,12 @@ final class HandOverlayView: UIView {
             contour.append(offset(points[i], entrySide, radii[min(i, radii.count - 1)]))
         }
 
-        // Punta: semicírculo del lado de entrada al de salida.
+        // Punta: semicÃ­rculo del lado de entrada al de salida.
         let tip = points[points.count - 1]
         let prev = points[points.count - 2]
         let dirAngle = atan2(tip.y - prev.y, tip.x - prev.x)
 
-        // Ángulos absolutos de cada lado en la punta.
+        // Ãngulos absolutos de cada lado en la punta.
         let entryAngle = angleOfVector(entrySide)
         let exitAngle = angleOfVector(exitSide)
 
@@ -398,7 +398,7 @@ final class HandOverlayView: UIView {
         }
     }
 
-    /// Añade puntos de arco tomando el camino más corto entre los dos ángulos.
+    /// AÃ±ade puntos de arco tomando el camino mÃ¡s corto entre los dos Ã¡ngulos.
     private func appendArc(_ contour: inout [CGPoint],
                            center: CGPoint,
                            radius: CGFloat,
@@ -411,8 +411,8 @@ final class HandOverlayView: UIView {
         while delta <= -.pi { delta += .pi * 2 }
         while delta > .pi { delta -= .pi * 2 }
 
-        // La punta tiene que abombarse en la dirección del dedo: si el punto medio del
-        // arco no coincide con esa dirección, se recorre por el otro lado.
+        // La punta tiene que abombarse en la direcciÃ³n del dedo: si el punto medio del
+        // arco no coincide con esa direcciÃ³n, se recorre por el otro lado.
         if let ref = referenceDirection {
             let outward = normalizeAngle(ref - (startAngle + delta * 0.5))
             if abs(outward) > .pi * 0.45 {

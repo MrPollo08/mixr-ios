@@ -9,8 +9,6 @@ enum GestureEvent {
     case click(CGPoint)
     /// Desplazarse: pinza mantenida + movimiento de la mano.
     case scroll(CGPoint, CGSize)
-    /// Volver al menú universal (palma abierta mirando al teléfono + pinza).
-    case universalMenu
     /// Tocar directamente con la yema del índice (sin pinza).
     case directTouch(CGPoint)
     /// Empezó / terminó de arrastrar una ventana.
@@ -55,13 +53,6 @@ final class GestureEngine {
     private var touchLatched: [String: Bool] = [:]
     private var lastTouchEventAt: CFTimeInterval = 0
 
-    // Menú universal
-    private var lastUniversalAt: CFTimeInterval = 0
-    private var menuHoldSince: CFTimeInterval?
-    private let universalCooldown: CFTimeInterval = 1.4
-    /// Tiempo que hay que mantener "palma abierta + pinza" para evitar disparos falsos.
-    private let menuHoldTime: CFTimeInterval = 0.30
-
     // Arrastre
     private var dragStartPoint: CGPoint = .zero
     private var dragStartPosition: simd_float3 = .zero
@@ -90,27 +81,6 @@ final class GestureEngine {
     func update(poses: [HandPose], host: WindowHostView, pose: CameraPose) {
         let now = CACurrentMediaTime()
         let primary = poses.first
-
-        // --- Gesto 3: menú universal (palma abierta de frente + pinza sostenida) ---
-        var palmMenuActive = false
-        for hand in poses where hand.isPalmFacingCamera && hand.isOpenHand && hand.pinch >= pinchEnter {
-            palmMenuActive = true
-            if menuHoldSince == nil { menuHoldSince = now }
-            break
-        }
-        if palmMenuActive {
-            if let since = menuHoldSince,
-               now - since >= menuHoldTime,
-               now - lastUniversalAt > universalCooldown {
-                lastUniversalAt = now
-                menuHoldSince = nil
-                onEvent?(.universalMenu)
-                reset()
-                return
-            }
-        } else {
-            menuHoldSince = nil
-        }
 
         // --- Gesto 4: Direct Touch (yema apoyada sobre una ventana) ---
         handleDirectTouch(poses: poses, host: host, pose: pose, now: now)

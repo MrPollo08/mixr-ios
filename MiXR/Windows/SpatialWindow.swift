@@ -1,4 +1,4 @@
-import ARKit
+﻿import ARKit
 import Foundation
 import UIKit
 import simd
@@ -9,8 +9,6 @@ enum WindowKind {
     case web(URL)
     /// Pantalla del PC por streaming (H.264) + mouse virtual.
     case pcStream(port: UInt16)
-    /// Menú flotante de la app (se aprieta con la pinza).
-    case menu
     /// Teclado flotante que escribe en la PC.
     case keyboard
 
@@ -18,7 +16,7 @@ enum WindowKind {
         switch self {
         case .video(let url): return url
         case .web(let url): return url
-        case .pcStream, .menu, .keyboard: return nil
+        case .pcStream, .keyboard: return nil
         }
     }
 
@@ -27,7 +25,6 @@ enum WindowKind {
         case .video: return "Video"
         case .web: return "Web"
         case .pcStream: return "Pantalla del PC"
-        case .menu: return "MiXR"
         case .keyboard: return "Teclado"
         }
     }
@@ -38,7 +35,6 @@ enum WindowKind {
         case .video: return 16.0 / 9.0
         case .web: return 1.0
         case .pcStream: return 16.0 / 9.0
-        case .menu: return 1.30
         case .keyboard: return 1.55
         }
     }
@@ -47,20 +43,14 @@ enum WindowKind {
     var showsLinkButton: Bool {
         switch self {
         case .video, .web: return true
-        case .pcStream, .menu, .keyboard: return false
+        case .pcStream, .keyboard: return false
         }
     }
 
-    /// El menú flota sin panel: sólo los íconos.
-    var chromeless: Bool {
-        if case .menu = self { return true }
-        return false
-    }
-
-    /// El menú no se puede cerrar: es la página principal.
+    /// El teclado no se puede cerrar con la ✕ (lo cierra el gesto).
     var showsCloseButton: Bool {
         switch self {
-        case .menu: return false
+        case .keyboard: return false
         default: return true
         }
     }
@@ -70,7 +60,6 @@ enum WindowKind {
         case .video(let url): return VideoContentView(url: url)
         case .web(let url): return WebContentView(url: url)
         case .pcStream(let port): return StreamContentView(port: port)
-        case .menu: return MenuContentView()
         case .keyboard: return KeyboardContentView()
         }
     }
@@ -96,7 +85,7 @@ final class SpatialWindow {
     var currentURL: URL?
 
     /// Si está "pegada", la ventana se queda delante de la cara (no se ancla
-    /// al mundo). Es lo opuesto al anclaje y se elige con el tile "Pegar".
+    /// al mundo).
     var pinned = false
     var pinnedDistance: Float = 1.1
 
@@ -107,9 +96,9 @@ final class SpatialWindow {
     /// Posición suavizada para dibujar (anti temblor del tracking).
     var smoothedCenter: CGPoint?
 
-    /// Si la ventana es un menú: apretar un botón (en coordenadas del host).
+    /// Apretar un botón del contenido (en coordenadas del host).
     var pressAt: ((CGPoint) -> Bool)?
-    /// El dedo se movió sobre el menú (nil = no hay dedo cerca). dt en segundos.
+    /// El dedo se movió sobre el contenido (nil = no hay dedo cerca). dt en segundos.
     var hoverAt: ((CGPoint?, CGFloat) -> Void)?
     /// Scroll por gesto de pinza mantenida + movimiento (punto del host, delta en puntos).
     var scrollAt: ((CGPoint, CGSize) -> Bool)?

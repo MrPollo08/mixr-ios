@@ -54,8 +54,7 @@ final class WindowHostView: UIView {
         let view = SpatialWindowView(title: kind.title,
                                      bodyAspect: kind.aspect,
                                      showsLinkButton: kind.showsLinkButton,
-                                     showsCloseButton: kind.showsCloseButton,
-                                     chromeless: kind.chromeless)
+                                     showsCloseButton: kind.showsCloseButton)
         view.isHidden = true
 
         let window = SpatialWindow(kind: kind,
@@ -66,19 +65,8 @@ final class WindowHostView: UIView {
         let content = kind.makeContent()
         view.setContent(content)
 
-        // Capas de renderizado: los menús flotantes viven en la capa Overlay UI (z = 500)
-        // siempre visibles por encima de los escenarios y monitores (z = 100).
-        if case .menu = kind {
-            view.layer.zPosition = 500
-        } else {
-            view.layer.zPosition = 100
-        }
-
-        if let menu = content as? MenuContentView {
-            menu.onAction = { [weak self] action in
-                self?.session?.handleMenuAction(action)
-            }
-        }
+        // Todas las ventanas de escenario viven en la capa de mundo (z = 100).
+        view.layer.zPosition = 100
 
         if let stream = content as? StreamContentView {
             stream.onVideoSize = { [weak self, weak window] size in

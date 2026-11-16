@@ -7,40 +7,41 @@ import simd
 /// Fusión de **Apple Vision (Mano 21 pts + Cuerpo/Brazo) + Sensor LiDAR (`ARFrame.sceneDepth`)**.
 ///
 /// - Extrae la profundidad métrica real (metros) de la palma, de las 21 articulaciones
-///   y del **antebrazo/brazo (`Arm Tracking`)** desde el buffer Float32 del LiDAR.
+///   y del **antebrazo (`Arm Tracking`)** desde el buffer Float32 del LiDAR.
 /// - Escanea secciones transversales en el mapa LiDAR a partir de la muñeca para seguir
-///   el ángulo y la profundidad real del antebrazo del usuario.
+///   el ángulo y la profundidad real del antebrazo.
+/// - Acepta una **calibración métrica de la palma** (medida del usuario con LiDAR) para
+///   que la inferencia de profundidad de los dedos use su mano real, no una media.
 enum HandDepthSampler {
 
-    /// Longitudes anatómicas relativas respecto de la distancia `wrist -> middleMCP` (~8.8 cm).
-    private static let relativeBoneLengths: [(parent: VNHumanHandPoseObservation.JointName,
-                                              child: VNHumanHandPoseObservation.JointName,
-                                              ratio: Float)] = [
-        // Pulgar
-        (.wrist, .thumbCMC, 0.38),
-        (.thumbCMC, .thumbMP, 0.46),
-        (.thumbMP, .thumbIP, 0.36),
-        (.thumbIP, .thumbTip, 0.30),
-        // Índice
-        (.wrist, .indexMCP, 0.98),
-        (.indexMCP, .indexPIP, 0.45),
-        (.indexPIP, .indexDIP, 0.28),
-        (.indexDIP, .indexTip, 0.24),
-        // Medio
+    /// Longitudes anatómicas relativas respecto de `wrist -> middleMCP` (palma ≈ 9.5 cm).
+    static let relativeBoneLengths: [(parent: VNHumanHandPoseObservation.JointName,
+                                      child: VNHumanHandPoseObservation.JointName,
+                                      ratio: Float)] = [
+        (.wrist, .thumbCMC, 0.34),
+        (.thumbCMC, .thumbMP, 0.30),
+        (.thumbMP, .thumbIP, 0.24),
+        (.thumbIP, .thumbTip, 0.19),
+
+        (.wrist, .indexMCP, 1.00),
+        (.indexMCP, .indexPIP, 0.48),
+        (.indexPIP, .indexDIP, 0.27),
+        (.indexDIP, .indexTip, 0.22),
+
         (.wrist, .middleMCP, 1.00),
-        (.middleMCP, .middlePIP, 0.50),
-        (.middlePIP, .middleDIP, 0.31),
-        (.middleDIP, .middleTip, 0.25),
-        // Anular
-        (.wrist, .ringMCP, 0.94),
-        (.ringMCP, .ringPIP, 0.46),
-        (.ringPIP, .ringDIP, 0.29),
-        (.ringDIP, .ringTip, 0.24),
-        // Meñique
+        (.middleMCP, .middlePIP, 0.52),
+        (.middlePIP, .middleDIP, 0.29),
+        (.middleDIP, .middleTip, 0.23),
+
+        (.wrist, .ringMCP, 0.95),
+        (.ringMCP, .ringPIP, 0.49),
+        (.ringPIP, .ringDIP, 0.27),
+        (.ringDIP, .ringTip, 0.22),
+
         (.wrist, .littleMCP, 0.86),
         (.littleMCP, .littlePIP, 0.36),
-        (.littlePIP, .littleDIP, 0.23),
-        (.littleDIP, .littleTip, 0.21)
+        (.littlePIP, .littleDIP, 0.21),
+        (.littleDIP, .littleTip, 0.18)
     ]
 
     struct Forearm3D {
@@ -51,23 +52,26 @@ enum HandDepthSampler {
         let elbowDepthMeters: Float
         let elbowCamera3D: simd_float3
         let elbowWorld3D: simd_float3
+        /// true si el codo viene de Vision Body Pose (no de la extensión al borde).
+        let elbowFromBody: Bool
     }
 
     struct Reconstruction3D {
         let palmDepthMeters: Float
         let hasLiDAR: Bool
+        /// Longitud métrica estimada de la palma (muñeca → nudillo medio), en metros.
+        let estimatedPalmMeters: Float
         let jointDepths: [VNHumanHandPoseObservation.JointName: Float]
         let cameraJoints: [VNHumanHandPoseObservation.JointName: simd_float3]
         let worldJoints: [VNHumanHandPoseObservation.JointName: simd_float3]
         let forearm: Forearm3D
     }
 
-    /// Reconstruye las 21 articulaciones de la mano + el eje 3D del antebrazo (`Arm Tracking`)
-    /// combinando Vision 2D, `VNDetectHumanBodyPoseRequest` (codo/muñeca) y el sensor LiDAR.
     static func reconstructHandAndArm3D(screenJoints: [VNHumanHandPoseObservation.JointName: CGPoint],
                                         visionElbow2D: CGPoint?,
                                         depthMap: CVPixelBuffer?,
                                         confidenceMap: CVPixelBuffer?,
+                                        metricPalmMeters: Float,
                                         pose: CameraPose) -> Reconstruction3D {
         let viewport = pose.viewport
         let aspect = pose.imageAspect
@@ -75,57 +79,61 @@ enum HandDepthSampler {
 
         let wristPt = screenJoints[.wrist] ?? CGPoint(x: viewport.width * 0.5, y: viewport.height * 0.8)
         let middlePt = screenJoints[.middleMCP] ?? CGPoint(x: wristPt.x, y: wristPt.y - 60)
-        let palmPixels = max(hypot(wristPt.x - middlePt.x, wristPt.y - middlePt.y), 14.0)
+        let palmPixels = max(hypot(wristPt.x - middlePt.x, wristPt.y - middlePt.y), 12.0)
 
-        // 1. Estimación métrica por tamaño aparente de la palma (respaldo si no hay LiDAR).
+        // Tamaño real de la palma del usuario (calibrado con LiDAR, con respaldo antropométrico).
+        let realPalm = clamp(metricPalmMeters, 0.060, 0.130)
+
         let focal = Float(max((pose.focalX + pose.focalY) * 0.5, 240.0))
-        let apparentPalmDepth = min(max((focal * 0.088) / Float(palmPixels), 0.15), 1.45)
+        // Distancia estimada sólo por tamaño aparente (respaldo cuando no hay LiDAR).
+        let apparentPalmDepth = clamp((focal * realPalm) / Float(palmPixels), 0.14, 1.50)
 
         var rawJointSamples: [VNHumanHandPoseObservation.JointName: Float] = [:]
         var palmCandidates: [Float] = []
 
-        // Dirección anatómica base del antebrazo (desde el centro de nudillos hacia la muñeca).
-        let knuckleCenter: CGPoint = {
-            let pts = [
-                screenJoints[.indexMCP],
-                screenJoints[.middleMCP],
-                screenJoints[.ringMCP],
-                screenJoints[.littleMCP]
-            ].compactMap { $0 }
-            guard !pts.isEmpty else { return middlePt }
-            let sx = pts.reduce(CGFloat(0)) { $0 + $1.x }
-            let sy = pts.reduce(CGFloat(0)) { $0 + $1.y }
-            return CGPoint(x: sx / CGFloat(pts.count), y: sy / CGFloat(pts.count))
-        }()
+        // Eje anatómico del antebrazo (nudillos → muñeca).
+        let knuckleCenter = averagePoint([
+            screenJoints[.indexMCP], screenJoints[.middleMCP],
+            screenJoints[.ringMCP], screenJoints[.littleMCP]
+        ]) ?? middlePt
 
         var baseArmDir = CGPoint(x: wristPt.x - knuckleCenter.x, y: wristPt.y - knuckleCenter.y)
-        let baseArmLen = max(hypot(baseArmDir.x, baseArmDir.y), 0.001)
-        baseArmDir.x /= baseArmLen
-        baseArmDir.y /= baseArmLen
+        baseArmDir = normalizePoint(baseArmDir, fallback: CGPoint(x: 0, y: 1))
 
-        // Si Vision Body Pose detectó el codo real, fusionamos su dirección con el eje anatómico.
+        // Codo de Vision Body Pose: sólo se acepta si apunta en el mismo hemisferio.
+        var elbowFromBody = false
         if let elbow = visionElbow2D {
             let dx = elbow.x - wristPt.x
             let dy = elbow.y - wristPt.y
             let dist = hypot(dx, dy)
-            if dist > palmPixels * 0.4 && dist < palmPixels * 4.5 {
+            if dist > palmPixels * 0.45 && dist < palmPixels * 5.0 {
                 let bodyDir = CGPoint(x: dx / dist, y: dy / dist)
-                // Sólo aceptar si apunta en el mismo hemisferio que la muñeca (producto escalar > 0.15).
-                if baseArmDir.x * bodyDir.x + baseArmDir.y * bodyDir.y > 0.15 {
-                    baseArmDir = CGPoint(x: baseArmDir.x * 0.35 + bodyDir.x * 0.65,
-                                         y: baseArmDir.y * 0.35 + bodyDir.y * 0.65)
-                    let norm = max(hypot(baseArmDir.x, baseArmDir.y), 0.001)
-                    baseArmDir.x /= norm
-                    baseArmDir.y /= norm
+                if baseArmDir.x * bodyDir.x + baseArmDir.y * bodyDir.y > 0.30 {
+                    baseArmDir = normalizePoint(CGPoint(x: baseArmDir.x * 0.30 + bodyDir.x * 0.70,
+                                                        y: baseArmDir.y * 0.30 + bodyDir.y * 0.70),
+                                                fallback: baseArmDir)
+                    elbowFromBody = true
                 }
             }
         }
 
-        let forearmLength = palmPixels * 1.65
-        var tracedMidForearm2D = CGPoint(x: wristPt.x + baseArmDir.x * (forearmLength * 0.5),
-                                         y: wristPt.y + baseArmDir.y * (forearmLength * 0.5))
-        var tracedElbow2D = CGPoint(x: wristPt.x + baseArmDir.x * forearmLength,
-                                    y: wristPt.y + baseArmDir.y * forearmLength)
+        // Sin codo: el antebrazo continúa hasta el borde del cuadro (nunca corta en el aire).
+        var elbow2D: CGPoint
+        let minArmLen = palmPixels * 1.15
+        let maxArmLen = palmPixels * 3.2
+        if elbowFromBody, let elbow = visionElbow2D {
+            let dx = elbow.x - wristPt.x
+            let dy = elbow.y - wristPt.y
+            let len = max(hypot(dx, dy), minArmLen)
+            elbow2D = CGPoint(x: wristPt.x + baseArmDir.x * min(len, maxArmLen),
+                              y: wristPt.y + baseArmDir.y * min(len, maxArmLen))
+        } else {
+            let edge = intersectViewport(from: wristPt, direction: baseArmDir, viewport: viewport)
+            let len = clamp(Float(edge), Float(minArmLen), Float(maxArmLen))
+            elbow2D = CGPoint(x: wristPt.x + baseArmDir.x * CGFloat(len),
+                              y: wristPt.y + baseArmDir.y * CGFloat(len))
+        }
+
         var tracedElbowDepth: Float?
 
         if let depthMap {
@@ -182,21 +190,19 @@ enum HandDepthSampler {
                     }
                 }
 
-                // Rastreo LiDAR del antebrazo (Arm Tracking): escanea secciones transversales
-                // desde la muñeca hacia el codo para localizar el cilindro real del brazo en 3D.
-                let wristRef = rawJointSamples[.wrist] ?? refDepth
-                let armTrace = traceLockedForearmInLiDAR(wrist: wristPt,
-                                                         initialDir: baseArmDir,
-                                                         palmScale: palmPixels,
-                                                         wristDepth: wristRef,
-                                                         depthMap: depthMap,
-                                                         confidenceMap: confidenceMap,
-                                                         imageAspect: aspect,
-                                                         viewport: viewport,
-                                                         orientation: orientation)
-                tracedMidForearm2D = armTrace.midPoint
-                tracedElbow2D = armTrace.endPoint
+                // Rastreo transversal del antebrazo en el mapa de profundidad.
+                let armTrace = traceLockedForearm(wrist: wristPt,
+                                                  initialDir: baseArmDir,
+                                                  endPoint: elbow2D,
+                                                  palmScale: palmPixels,
+                                                  wristDepth: rawJointSamples[.wrist] ?? refDepth,
+                                                  depthMap: depthMap,
+                                                  confidenceMap: confidenceMap,
+                                                  imageAspect: aspect,
+                                                  viewport: viewport,
+                                                  orientation: orientation)
                 tracedElbowDepth = armTrace.endDepth
+                if !elbowFromBody { elbow2D = armTrace.endPoint }
             }
         }
 
@@ -204,33 +210,38 @@ enum HandDepthSampler {
         let anchorDepth: Float = {
             if hasLiDAR {
                 let rawLidar = palmCandidates[max(0, min(palmCandidates.count - 1, palmCandidates.count / 3))]
-                return min(max(rawLidar, 0.12), 1.80)
+                return clamp(rawLidar, 0.12, 1.80)
             }
             return apparentPalmDepth
         }()
 
-        // 2. Asignar y restringir anatómica y cinemáticamente la profundidad Z de cada hueso.
-        var jointDepths: [VNHumanHandPoseObservation.JointName: Float] = [:]
-        jointDepths[.wrist] = rawJointSamples[.wrist].map { clampNear($0, ref: anchorDepth, maxDelta: 0.06) } ?? anchorDepth
+        // Calibración observada: conocemos los píxeles de la palma y su profundidad.
+        let observedPalmMeters = clamp((Float(palmPixels) / focal) * anchorDepth, 0.050, 0.150)
 
-        let baseMetricPalm: Float = 0.088
+        // Profundidades articulación por articulación con restricciones cinemáticas.
+        var jointDepths: [VNHumanHandPoseObservation.JointName: Float] = [:]
+        jointDepths[.wrist] = rawJointSamples[.wrist].map { clampNear($0, ref: anchorDepth, maxDelta: 0.05) } ?? anchorDepth
 
         for link in relativeBoneLengths {
             guard let childPt = screenJoints[link.child] else { continue }
             let parentDepth = jointDepths[link.parent] ?? anchorDepth
-            let maxBoneMeters = baseMetricPalm * link.ratio * 1.35
+            let nominalLen = realPalm * link.ratio
+            let maxBoneMeters = nominalLen * 1.45
 
             if let sampled = rawJointSamples[link.child],
                abs(sampled - parentDepth) <= maxBoneMeters {
-                jointDepths[link.child] = parentDepth * 0.25 + sampled * 0.75
+                jointDepths[link.child] = parentDepth * 0.30 + sampled * 0.70
             } else if let parentPt = screenJoints[link.parent] {
+                // Sin lectura válida del LiDAR (dedo fino / fondo brillante): se infiere
+                // el escorzo 3D con la longitud anatómica real del hueso.
                 let dxMeters = (Float(childPt.x - parentPt.x) / focal) * parentDepth
                 let dyMeters = (Float(childPt.y - parentPt.y) / focal) * parentDepth
                 let planarSq = dxMeters * dxMeters + dyMeters * dyMeters
-                let nominalLen = baseMetricPalm * link.ratio
                 let dz = sqrt(max(0.0, nominalLen * nominalLen - min(planarSq, nominalLen * nominalLen)))
-                let inferred = parentDepth - dz * 0.35
-                jointDepths[link.child] = clampNear(inferred, ref: anchorDepth, maxDelta: 0.14)
+                // Las falanges distales tienden a arquearse hacia la cámara.
+                let curl: Float = link.ratio < 0.30 ? 0.30 : 0.12
+                let inferred = parentDepth - dz * curl
+                jointDepths[link.child] = clampNear(inferred, ref: anchorDepth, maxDelta: 0.16)
             } else {
                 jointDepths[link.child] = parentDepth
             }
@@ -240,10 +251,8 @@ enum HandDepthSampler {
             jointDepths[name] = anchorDepth
         }
 
-        // 3. Desproyectar las 21 articulaciones + el antebrazo al espacio 3D de cámara y mundo.
         var cameraJoints: [VNHumanHandPoseObservation.JointName: simd_float3] = [:]
         var worldJoints: [VNHumanHandPoseObservation.JointName: simd_float3] = [:]
-
         for (name, pt) in screenJoints {
             let d = jointDepths[name] ?? anchorDepth
             let cam3D = pose.unprojectToCamera(screenPoint: pt, depth: d)
@@ -252,61 +261,65 @@ enum HandDepthSampler {
         }
 
         let wristDepthFinal = jointDepths[.wrist] ?? anchorDepth
-        let elbowDepthFinal = tracedElbowDepth ?? min(wristDepthFinal + 0.04, 1.85)
-        let elbowCam3D = pose.unprojectToCamera(screenPoint: tracedElbow2D, depth: elbowDepthFinal)
-        let elbowWorld3D = pose.cameraToWorld(elbowCam3D)
+        let elbowDepthFinal = tracedElbowDepth ?? min(wristDepthFinal + 0.05, 1.85)
+        let elbowCam3D = pose.unprojectToCamera(screenPoint: elbow2D, depth: elbowDepthFinal)
 
         let forearm = Forearm3D(wrist2D: wristPt,
-                                midForearm2D: tracedMidForearm2D,
-                                elbow2D: tracedElbow2D,
+                                midForearm2D: CGPoint(x: (wristPt.x + elbow2D.x) * 0.5,
+                                                      y: (wristPt.y + elbow2D.y) * 0.5),
+                                elbow2D: elbow2D,
                                 wristDepthMeters: wristDepthFinal,
                                 elbowDepthMeters: elbowDepthFinal,
                                 elbowCamera3D: elbowCam3D,
-                                elbowWorld3D: elbowWorld3D)
+                                elbowWorld3D: pose.cameraToWorld(elbowCam3D),
+                                elbowFromBody: elbowFromBody)
 
         return Reconstruction3D(palmDepthMeters: anchorDepth,
                                 hasLiDAR: hasLiDAR,
+                                estimatedPalmMeters: observedPalmMeters,
                                 jointDepths: jointDepths,
                                 cameraJoints: cameraJoints,
                                 worldJoints: worldJoints,
                                 forearm: forearm)
     }
 
-    // MARK: - Rastreo Transversal del Antebrazo sobre el Mapa de Profundidad LiDAR
+    // MARK: - Antebrazo en el mapa de profundidad
 
-    private static func traceLockedForearmInLiDAR(wrist: CGPoint,
-                                                  initialDir: CGPoint,
-                                                  palmScale: CGFloat,
-                                                  wristDepth: Float,
-                                                  depthMap: CVPixelBuffer,
-                                                  confidenceMap: CVPixelBuffer?,
-                                                  imageAspect: CGFloat,
-                                                  viewport: CGSize,
-                                                  orientation: UIInterfaceOrientation)
-        -> (midPoint: CGPoint, endPoint: CGPoint, endDepth: Float) {
+    private static func traceLockedForearm(wrist: CGPoint,
+                                           initialDir: CGPoint,
+                                           endPoint: CGPoint,
+                                           palmScale: CGFloat,
+                                           wristDepth: Float,
+                                           depthMap: CVPixelBuffer,
+                                           confidenceMap: CVPixelBuffer?,
+                                           imageAspect: CGFloat,
+                                           viewport: CGSize,
+                                           orientation: UIInterfaceOrientation)
+        -> (endPoint: CGPoint, endDepth: Float) {
 
-        var currentDir = initialDir
-        let perp = CGPoint(x: -currentDir.y, y: currentDir.x)
-        let totalLen = palmScale * 1.65
+        let totalLen = hypot(endPoint.x - wrist.x, endPoint.y - wrist.y)
+        guard totalLen > palmScale * 0.6 else { return (endPoint, wristDepth) }
 
-        var midPoint = CGPoint(x: wrist.x + currentDir.x * (totalLen * 0.5),
-                               y: wrist.y + currentDir.y * (totalLen * 0.5))
-        var endDepth = wristDepth
+        var dir = initialDir
+        var perp = CGPoint(x: -dir.y, y: dir.x)
+        var bestEnd = endPoint
+        var bestDepth = wristDepth
 
-        // Muestreamos dos secciones transversales (a 0.55x y 1.15x del tamaño de palma desde la muñeca)
-        // para encontrar el centro de masa real del antebrazo en el mapa LiDAR.
-        for (stepIdx, distFactor) in [CGFloat(0.55), CGFloat(1.15)].enumerated() {
-            let centerSample = CGPoint(x: wrist.x + currentDir.x * (palmScale * distFactor),
-                                       y: wrist.y + currentDir.y * (palmScale * distFactor))
+        for distFactor in [CGFloat(0.55), CGFloat(1.05), CGFloat(1.55)] {
+            let probeDist = palmScale * distFactor
+            guard probeDist < totalLen else { break }
+            let center = CGPoint(x: wrist.x + dir.x * probeDist,
+                                 y: wrist.y + dir.y * probeDist)
+
             var weightedOffset: CGFloat = 0
             var weightSum: CGFloat = 0
             var depthAccum: Float = 0
             var depthCount: Float = 0
 
-            for offsetStep in -3...3 {
-                let lateral = CGFloat(offsetStep) * (palmScale * 0.11)
-                let probe = CGPoint(x: centerSample.x + perp.x * lateral,
-                                    y: centerSample.y + perp.y * lateral)
+            for step in -4...4 {
+                let lateral = CGFloat(step) * (palmScale * 0.085)
+                let probe = CGPoint(x: center.x + perp.x * lateral,
+                                    y: center.y + perp.y * lateral)
                 if let d = sampleLockedDepth(at: probe,
                                              depthMap: depthMap,
                                              confidenceMap: confidenceMap,
@@ -314,49 +327,73 @@ enum HandDepthSampler {
                                              viewport: viewport,
                                              orientation: orientation,
                                              referenceDepth: nil),
-                   d >= wristDepth - 0.14 && d <= wristDepth + 0.22 {
-                    let w: CGFloat = 1.0
-                    weightedOffset += lateral * w
-                    weightSum += w
+                   d >= wristDepth - 0.18 && d <= wristDepth + 0.26 {
+                    weightedOffset += lateral
+                    weightSum += 1
                     depthAccum += d
                     depthCount += 1
                 }
             }
 
-            if weightSum >= 2.0 {
-                let shift = (weightedOffset / weightSum) * 0.55
-                let refinedPt = CGPoint(x: centerSample.x + perp.x * shift,
-                                        y: centerSample.y + perp.y * shift)
-                let dx = refinedPt.x - wrist.x
-                let dy = refinedPt.y - wrist.y
-                let len = max(hypot(dx, dy), 0.001)
-                currentDir = CGPoint(x: currentDir.x * 0.45 + (dx / len) * 0.55,
-                                     y: currentDir.y * 0.45 + (dy / len) * 0.55)
-                let norm = max(hypot(currentDir.x, currentDir.y), 0.001)
-                currentDir.x /= norm
-                currentDir.y /= norm
-
-                if stepIdx == 0 {
-                    midPoint = refinedPt
-                }
-                if depthCount > 0 {
-                    endDepth = depthAccum / depthCount
-                }
+            if weightSum >= 3 {
+                let shift = (weightedOffset / weightSum) * 0.45
+                let refined = CGPoint(x: center.x + perp.x * shift, y: center.y + perp.y * shift)
+                dir = normalizePoint(CGPoint(x: dir.x * 0.55 + (refined.x - wrist.x) * 0.45,
+                                             y: dir.y * 0.55 + (refined.y - wrist.y) * 0.45),
+                                     fallback: dir)
+                perp = CGPoint(x: -dir.y, y: dir.x)
+                bestDepth = depthAccum / depthCount
             }
         }
 
-        let endPoint = CGPoint(x: wrist.x + currentDir.x * totalLen,
-                               y: wrist.y + currentDir.y * totalLen)
-        midPoint = CGPoint(x: (wrist.x + endPoint.x) * 0.5,
-                           y: (wrist.y + endPoint.y) * 0.5)
-        return (midPoint, endPoint, endDepth)
+        bestEnd = CGPoint(x: wrist.x + dir.x * totalLen, y: wrist.y + dir.y * totalLen)
+        return (bestEnd, bestDepth)
     }
 
-    // MARK: - Muestreo interno 3x3 sobre el buffer LiDAR
+    // MARK: - Utilidades
+
+    private static func averagePoint(_ points: [CGPoint?]) -> CGPoint? {
+        let valid = points.compactMap { $0 }
+        guard !valid.isEmpty else { return nil }
+        var sx: CGFloat = 0
+        var sy: CGFloat = 0
+        for pt in valid { sx += pt.x; sy += pt.y }
+        return CGPoint(x: sx / CGFloat(valid.count), y: sy / CGFloat(valid.count))
+    }
+
+    private static func normalizePoint(_ p: CGPoint, fallback: CGPoint) -> CGPoint {
+        let len = hypot(p.x, p.y)
+        guard len > 1e-4 else { return fallback }
+        return CGPoint(x: p.x / len, y: p.y / len)
+    }
+
+    /// Distancia (en puntos) desde `origin` hasta el borde del viewport a lo largo de `dir`.
+    private static func intersectViewport(from origin: CGPoint,
+                                          direction: CGPoint,
+                                          viewport: CGSize) -> CGFloat {
+        var best = CGFloat.greatestFiniteMagnitude
+        if abs(direction.x) > 1e-4 {
+            let t1 = (0 - origin.x) / direction.x
+            let t2 = (viewport.width - origin.x) / direction.x
+            for t in [t1, t2] where t > 1 { best = min(best, t) }
+        }
+        if abs(direction.y) > 1e-4 {
+            let t1 = (0 - origin.y) / direction.y
+            let t2 = (viewport.height - origin.y) / direction.y
+            for t in [t1, t2] where t > 1 { best = min(best, t) }
+        }
+        return best.isFinite ? best : 200
+    }
+
+    private static func clamp(_ value: Float, _ low: Float, _ high: Float) -> Float {
+        min(max(value, low), high)
+    }
 
     private static func clampNear(_ value: Float, ref: Float, maxDelta: Float) -> Float {
         min(max(value, ref - maxDelta), ref + maxDelta)
     }
+
+    // MARK: - Muestreo 3x3 sobre el buffer LiDAR
 
     private static func sampleLockedDepth(at point: CGPoint,
                                           depthMap: CVPixelBuffer,
@@ -405,16 +442,15 @@ enum HandDepthSampler {
 
                 if let confBase, confWidth == width, confHeight == height {
                     let confPtr = confBase.advanced(by: y * confRowBytes + x)
-                    let conf = confPtr.assumingMemoryBound(to: UInt8.self).pointee
-                    if conf == 0 { continue }
+                    if confPtr.assumingMemoryBound(to: UInt8.self).pointee == 0 { continue }
                 }
 
                 let ptr = base.advanced(by: y * rowBytes + x * 4)
                 let meters = ptr.assumingMemoryBound(to: Float32.self).pointee
-                guard meters.isFinite, meters > 0.10, meters < 2.20 else { continue }
+                guard meters.isFinite, meters > 0.10, meters < 2.30 else { continue }
 
                 if let ref = referenceDepth {
-                    guard meters >= ref - 0.18, meters <= ref + 0.15 else { continue }
+                    guard meters >= ref - 0.20, meters <= ref + 0.16 else { continue }
                 }
                 samples.append(meters)
             }
@@ -423,16 +459,11 @@ enum HandDepthSampler {
         if samples.isEmpty {
             let ptr = base.advanced(by: centerY * rowBytes + centerX * 4)
             let meters = ptr.assumingMemoryBound(to: Float32.self).pointee
-            if meters.isFinite, meters > 0.10, meters < 2.20 {
-                if let ref = referenceDepth {
-                    if meters >= ref - 0.18 && meters <= ref + 0.15 {
-                        return meters
-                    }
-                    return nil
-                }
-                return meters
+            guard meters.isFinite, meters > 0.10, meters < 2.30 else { return nil }
+            if let ref = referenceDepth {
+                return (meters >= ref - 0.20 && meters <= ref + 0.16) ? meters : nil
             }
-            return nil
+            return meters
         }
 
         samples.sort()

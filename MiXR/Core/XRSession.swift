@@ -1,4 +1,4 @@
-import ARKit
+﻿import ARKit
 import Combine
 import CoreVideo
 import Foundation
@@ -30,7 +30,8 @@ final class XRSession: NSObject, ObservableObject {
     @Published var status = ""
     @Published var localAddress = LocalIP.wifiAddress() ?? "sin Wi-Fi"
     @Published var mouseEnabled = false
-    @Published var framing = 1
+    /// 2 = imagen completa de la cámara: nada recortado, ideal para el tracking de manos.
+    @Published var framing = 2
 
     var framingName: String {
         switch framing {
@@ -87,10 +88,17 @@ final class XRSession: NSObject, ObservableObject {
     private var lastHands: [HandPose] = []
     private var lastBuffer: CVPixelBuffer?
     private weak var monitor: SpatialWindow?
-    private weak var universalMenu: SpatialWindow?
     private var gamepadMoving = false
     private var mapLoaded = false
     private var restoredMonitor = false
+
+    // Predicción de movimiento (compensa la latencia de Vision entre frames).
+    private var previousHands: [HandPose] = []
+    private var previousHandsAt: CFTimeInterval = 0
+    private var currentHandsAt: CFTimeInterval = 0
+    /// Horizonte máximo de extrapolación y desplazamiento máximo permitido.
+    private let predictionHorizon: CFTimeInterval = 0.045
+    private let predictionMaxShiftRatio: CGFloat = 0.28
 
     lazy var containerView: UIView = {
         let view = UIView(frame: .zero)
@@ -136,7 +144,7 @@ final class XRSession: NSObject, ObservableObject {
     override init() {
         super.init()
         gamepad.onPrimary = { [weak self] in self?.connectPC() }
-        gamepad.onSecondary = { [weak self] in self?.toggleUniversalMenu() }
+        gamepad.onSecondary = { [weak self] in self?.centerWindows() }
         gestures.onEvent = { [weak self] event in self?.handle(event) }
         loadVRSettings()
     }
@@ -203,9 +211,6 @@ final class XRSession: NSObject, ObservableObject {
 
     private func handle(_ event: GestureEvent) {
         switch event {
-        case .universalMenu:
-            toggleUniversalMenu()
-
         case .grabEnded:
             for window in hostView.windows { reanchor(window) }
 
@@ -217,61 +222,6 @@ final class XRSession: NSObject, ObservableObject {
         case .scroll, .directTouch, .grabBegan:
             break
         }
-    }
-
-    // MARK: - Menú universal (Overlay UI)
-
-    func toggleUniversalMenu() {
-        if let menu = universalMenu, hostView.windows.contains(where: { $0 === menu }) {
-            if let anchor = menu.anchor {
-                arSession.remove(anchor: anchor)
-                menu.anchor = nil
-            }
-            hostView.remove(menu)
-            universalMenu = nil
-            if stereoEnabled { buildMirrorWindows() }
-            return
-        }
-
-        let menu = hostView.add(kind: .menu,
-                                position: positionInFront(distance: Config.menuDistance),
-                                physicalWidth: Config.menuWidth)
-        menu.view.layer.zPosition = 500
-        universalMenu = menu
-        anchor(menu)
-        if stereoEnabled { buildMirrorWindows() }
-    }
-
-    func handleMenuAction(_ action: MenuAction) {
-        switch action {
-        case .pc:
-            connectPC()
-        case .video:
-            addWindow(.video(Config.sampleVideoURL))
-        case .web:
-            addWindow(.web(Config.defaultWebURL))
-        case .control:
-            toggleMouse()
-        case .hands:
-            overlay.showsSkeleton.toggle()
-            leftPane.overlay.showsSkeleton = overlay.showsSkeleton
-            rightPane.overlay.showsSkeleton = overlay.showsSkeleton
-        case .stereo:
-            stereoEnabled.toggle()
-        case .recenter:
-            headTracker.recenterGyro()
-            centerWindows()
-        case .clear:
-            closeWindows()
-        }
-    }
-
-    private func addWindow(_ kind: WindowKind) {
-        let window = hostView.add(kind: kind,
-                                  position: positionInFront(distance: Config.windowDistance),
-                                  physicalWidth: Config.windowWidth)
-        anchor(window)
-        if stereoEnabled { buildMirrorWindows() }
     }
 
     // MARK: - Ventanas
@@ -301,7 +251,6 @@ final class XRSession: NSObject, ObservableObject {
         }
         hostView.removeAll()
         monitor = nil
-        universalMenu = nil
         if stereoEnabled {
             leftPane.host.removeAll()
             rightPane.host.removeAll()
@@ -331,8 +280,6 @@ final class XRSession: NSObject, ObservableObject {
         for window in hostView.windows {
             if window === monitor {
                 hostView.setPosition(window, positionInFront(distance: 1.6), force: true)
-            } else if window === universalMenu {
-                hostView.setPosition(window, positionInFront(distance: Config.menuDistance), force: true)
             } else {
                 hostView.setPosition(window, positionInFront(distance: Config.windowDistance), force: true)
             }
@@ -469,7 +416,7 @@ final class XRSession: NSObject, ObservableObject {
             restoreSavedMonitor()
         }
 
-        overlay.render(poses: lastHands)
+        overlay.render(poses: predictedHands())
         hostView.layout(pose: pose)
         if stereoEnabled {
             updateStereoPanes(pose: pose, buffer: frame.capturedImage, cameraSize: rect.size)
@@ -500,6 +447,10 @@ final class XRSession: NSObject, ObservableObject {
     }
 
     private func apply(_ poses: [HandPose], pose: CameraPose) {
+        previousHands = lastHands
+        previousHandsAt = currentHandsAt
+        currentHandsAt = CACurrentMediaTime()
+
         lastHands = poses
         if handCount != poses.count { handCount = poses.count }
 
@@ -541,6 +492,48 @@ final class XRSession: NSObject, ObservableObject {
             leftPane.overlay.setPointer(nil)
             rightPane.overlay.setPointer(nil)
         }
+    }
+
+    // MARK: - Predicción de movimiento
+
+    /// Extrapola las articulaciones hacia "ahora" con la velocidad medida entre los
+    /// dos últimos frames de Vision. Vision corre a 30 Hz y la pantalla a 60/120 Hz:
+    /// sin esto la malla va un frame por detrás de la mano real.
+    private func predictedHands() -> [HandPose] {
+        guard !lastHands.isEmpty, currentHandsAt > 0, previousHandsAt > 0 else { return lastHands }
+
+        let now = CACurrentMediaTime()
+        let elapsed = min(max(now - currentHandsAt, 0), predictionHorizon)
+        guard elapsed > 0.002 else { return lastHands }
+
+        let frameDelta = currentHandsAt - previousHandsAt
+        guard frameDelta > 0.004 else { return lastHands }
+
+        var result: [HandPose] = []
+        for (index, hand) in lastHands.enumerated() {
+            guard index < previousHands.count,
+                  previousHands[index].key == hand.key else {
+                result.append(hand)
+                continue
+            }
+            let previous = previousHands[index]
+            let maxShift = hand.palmScale * predictionMaxShiftRatio
+
+            var joints = hand.joints
+            for (name, point) in hand.joints {
+                guard let old = previous.joints[name] else { continue }
+                var dx = (point.x - old.x) / CGFloat(frameDelta) * CGFloat(elapsed)
+                var dy = (point.y - old.y) / CGFloat(frameDelta) * CGFloat(elapsed)
+                let magnitude = hypot(dx, dy)
+                if magnitude > maxShift, magnitude > 0.001 {
+                    dx *= maxShift / magnitude
+                    dy *= maxShift / magnitude
+                }
+                joints[name] = CGPoint(x: point.x + dx, y: point.y + dy)
+            }
+            result.append(hand.replacingJoints(joints))
+        }
+        return result
     }
 
     // MARK: - Mando
@@ -643,8 +636,8 @@ final class XRSession: NSObject, ObservableObject {
         leftPane.host.layout(pose: leftEye)
         rightPane.host.layout(pose: rightEye)
 
-        leftPane.render(poses: lastHands.map { $0.projected(for: leftEye) })
-        rightPane.render(poses: lastHands.map { $0.projected(for: rightEye) })
+        leftPane.render(poses: predictedHands().map { $0.projected(for: leftEye) })
+        rightPane.render(poses: predictedHands().map { $0.projected(for: rightEye) })
     }
 
     // MARK: - Ajustes VR
