@@ -1,32 +1,24 @@
 import UIKit
 
-/// Acción que se dispara al elegir un ícono del menú.
+/// Acción que se dispara al elegir un ícono del menú universal.
 enum MenuAction: CaseIterable {
     case pc
-    case youtube
     case video
-    case photos
     case web
     case control
     case hands
-    case occlusion
     case stereo
-    case wide
     case recenter
     case clear
 
     var title: String {
         switch self {
         case .pc: return "PC"
-        case .youtube: return "YouTube"
         case .video: return "Videos"
-        case .photos: return "Fotos"
         case .web: return "Web"
         case .control: return "Mouse"
         case .hands: return "Manos"
-        case .occlusion: return "Oclusión"
         case .stereo: return "VR"
-        case .wide: return "0.5x"
         case .recenter: return "Centrar"
         case .clear: return "Limpiar"
         }
@@ -35,15 +27,11 @@ enum MenuAction: CaseIterable {
     var symbol: String {
         switch self {
         case .pc: return "display"
-        case .youtube: return "play.rectangle.fill"
         case .video: return "film"
-        case .photos: return "photo.on.rectangle"
         case .web: return "globe"
         case .control: return "cursorarrow"
         case .hands: return "hand.raised.fill"
-        case .occlusion: return "circle.dashed"
         case .stereo: return "rectangle.split.2x1"
-        case .wide: return "camera.viewfinder"
         case .recenter: return "scope"
         case .clear: return "trash"
         }
@@ -52,15 +40,11 @@ enum MenuAction: CaseIterable {
     var colors: [UIColor] {
         switch self {
         case .pc: return [UIColor(hex: 0x7C6CF0), UIColor(hex: 0x3B2FA8)]
-        case .youtube: return [UIColor(hex: 0xFF5A5A), UIColor(hex: 0xC01F1F)]
         case .video: return [UIColor(hex: 0x4A9DFF), UIColor(hex: 0x0F4E9E)]
-        case .photos: return [UIColor(hex: 0xFF6FB0), UIColor(hex: 0xA81C60)]
         case .web: return [UIColor(hex: 0x1FD6A6), UIColor(hex: 0x087A5C)]
         case .control: return [UIColor(hex: 0xFFC44D), UIColor(hex: 0xB87B05)]
         case .hands: return [UIColor(hex: 0x35E084), UIColor(hex: 0x118A44)]
-        case .occlusion: return [UIColor(hex: 0xA96BF0), UIColor(hex: 0x552A93)]
         case .stereo: return [UIColor(hex: 0x8E7CFF), UIColor(hex: 0x3D2AA8)]
-        case .wide: return [UIColor(hex: 0x39C0A0), UIColor(hex: 0x0C5C4C)]
         case .recenter: return [UIColor(hex: 0x53B8FF), UIColor(hex: 0x0E5E9E)]
         case .clear: return [UIColor(hex: 0xF4617B), UIColor(hex: 0x8E1A2E)]
         }

@@ -1,6 +1,18 @@
 import UIKit
 import simd
 
+/// Contenido desplazable (scroll con la pinza mantenida).
+protocol ScrollableContent: AnyObject {
+    @discardableResult
+    func scroll(atLocal point: CGPoint, deltaY: CGFloat) -> Bool
+}
+
+/// Contenido que acepta un clic/toque directo sobre sus elementos.
+protocol ClickableContent: AnyObject {
+    @discardableResult
+    func click(atLocal point: CGPoint) -> Bool
+}
+
 /// Contiene las ventanas flotantes y las proyecta al espacio real.
 ///
 /// Todo el cálculo pasa por `CameraPose`, así funciona igual con ARKit (6DoF)
@@ -94,6 +106,21 @@ final class WindowHostView: UIView {
             }
         }
 
+        // Scroll y clic sobre el contenido (gestos de pinza mantenida y Direct Touch).
+        if let scrollable = content as? ScrollableContent {
+            window.scrollAt = { [weak self, weak scrollable, weak view] point, delta in
+                guard let self, let scrollable, let view else { return false }
+                return scrollable.scroll(atLocal: view.convert(point, from: self),
+                                         deltaY: delta.height)
+            }
+        }
+        if let clickable = content as? ClickableContent {
+            window.clickAt = { [weak self, weak clickable, weak view] point in
+                guard let self, let clickable, let view else { return false }
+                return clickable.click(atLocal: view.convert(point, from: self))
+            }
+        }
+
         view.onClose = { [weak self, weak window] in
             guard let self, let window else { return }
             self.remove(window)
@@ -181,6 +208,21 @@ final class WindowHostView: UIView {
 
     func center(of window: SpatialWindow) -> CGPoint {
         window.view.center
+    }
+
+    /// Rectángulo que ocupa la ventana en pantalla (aproximado: ignora la inclinación 3D).
+    /// Lo usan los gestos de Direct Touch y scroll.
+    func screenFrame(for window: SpatialWindow) -> CGRect? {
+        guard !window.view.isHidden, window.pointsPerMeter > 1 else { return nil }
+        let base = window.view.baseSize
+        guard base.width > 1 else { return nil }
+        let scale = (window.physicalWidth * window.pointsPerMeter) / base.width
+        guard scale.isFinite, scale > 0.001 else { return nil }
+        let w = base.width * scale
+        let h = base.height * scale
+        return CGRect(x: window.view.center.x - w / 2,
+                      y: window.view.center.y - h / 2,
+                      width: w, height: h)
     }
 
     /// Sólo un arrastre activo (o un recentrado explícito) puede mover una

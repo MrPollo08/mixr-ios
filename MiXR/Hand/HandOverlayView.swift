@@ -3,129 +3,80 @@ import UIKit
 import Vision
 import simd
 
-/// Capa de renderizado Overlay (`zPosition = 1000`) para la **Malla 3D Low-Poly de la Mano**
-/// y los cursores espaciales, siempre visible por encima de los escenarios y ventanas.
+/// Capa de renderizado Overlay (`zPosition = 1000`): **malla de mano + antebrazo**.
 ///
-/// Inspirada en el pipeline de referencia (@queryer Vision + LiDAR 3D Hand Mesh):
-/// - Malla articulada de 21 puntos y 19 huesos con espesor cónico (tapered capsules)
-///   escalado por la profundidad métrica real del sensor LiDAR.
-/// - Cuerpo oscuro translúcido (`charcoal black`) con borde exterior blanco nítido
-///   (Rim / Silhouette Outline) y sombreado cilíndrico 3D interno (Fresnel).
-/// - Ordenamiento Z real por falange (auto-oclusión 3D cuando los dedos se cruzan o doblan).
-/// - Gradiente alfa en la muñeca (`CAGradientLayer` en GPU) para fundir suavemente
-///   la malla 3D de la mano con el brazo real del usuario.
+/// El dibujo es un **único contorno cerrado** (perímetro real de la silueta), tal como
+/// en la referencia: relleno translúcido oscuro, línea fina clara por fuera, muescas
+/// en V entre los dedos y continuidad hacia el antebrazo que se desvanece en el brazo.
+///
+/// Al ser un solo polígono no hay líneas internas, ni parches de distinta opacidad,
+/// ni costuras entre falanges: el relleno es uniforme y el borde, continuo.
 final class HandOverlayView: UIView {
 
-    /// Grupo de capas GPU por cada mano detectada (hasta 2 manos simultáneas).
-    private final class HandMeshLayerGroup {
+    private final class HandMeshGroup {
         let container = CALayer()
         let wristMask = CAGradientLayer()
 
-        /// Pass 1: Contorno exterior blanco continuo (Silhouette Rim).
-        let outerRimLayer = CAShapeLayer()
-        /// Pass 2: Borde interno Fresnel gris suave.
-        let fresnelLayer = CAShapeLayer()
-        /// Pass 3: Relleno principal negro/carbón profundo.
-        let coreBodyLayer = CAShapeLayer()
-        /// Pass 4: Falanges en primer plano (ordenadas por Z LiDAR) + pliegues de auto-oclusión.
-        let foregroundCreaseLayer = CAShapeLayer()
-        let foregroundFillLayer = CAShapeLayer()
-        /// Pass 5: Sombreado volumétrico 3D a lo largo de los huesos de la malla low-poly.
-        let volumeShadingLayer = CAShapeLayer()
+        /// Relleno translúcido de toda la silueta.
+        let fillLayer = CAShapeLayer()
+        /// Línea fina exterior (contorno).
+        let outlineLayer = CAShapeLayer()
+        /// Sombra suave: da profundidad (la mano "flota" sobre el escenario).
+        let shadowLayer = CAShapeLayer()
 
         init() {
-            container.opacity = 0.90
+            container.opacity = 0.94
 
-            outerRimLayer.fillRule = .nonZero
-            outerRimLayer.fillColor = UIColor(white: 0.97, alpha: 0.96).cgColor
-            outerRimLayer.strokeColor = UIColor(white: 0.97, alpha: 0.96).cgColor
-            outerRimLayer.lineWidth = 4.6
-            outerRimLayer.lineJoin = .round
-            outerRimLayer.lineCap = .round
+            shadowLayer.fillColor = UIColor.black.withAlphaComponent(0.30).cgColor
+            shadowLayer.strokeColor = nil
 
-            fresnelLayer.fillRule = .nonZero
-            fresnelLayer.fillColor = UIColor(red: 0.22, green: 0.23, blue: 0.26, alpha: 1.0).cgColor
-            fresnelLayer.strokeColor = UIColor(red: 0.22, green: 0.23, blue: 0.26, alpha: 1.0).cgColor
-            fresnelLayer.lineWidth = 1.6
-            fresnelLayer.lineJoin = .round
-            fresnelLayer.lineCap = .round
+            fillLayer.fillColor = UIColor(white: 0.115, alpha: 0.58).cgColor
+            fillLayer.strokeColor = nil
+            fillLayer.fillRule = .nonZero
 
-            coreBodyLayer.fillRule = .nonZero
-            coreBodyLayer.fillColor = UIColor(red: 0.05, green: 0.055, blue: 0.07, alpha: 1.0).cgColor
-            coreBodyLayer.strokeColor = nil
+            outlineLayer.fillColor = UIColor.clear.cgColor
+            outlineLayer.strokeColor = UIColor(white: 0.93, alpha: 0.92).cgColor
+            outlineLayer.lineWidth = 1.7
+            outlineLayer.lineJoin = .round
+            outlineLayer.lineCap = .round
+            outlineLayer.fillRule = .nonZero
 
-            foregroundCreaseLayer.fillRule = .nonZero
-            foregroundCreaseLayer.fillColor = UIColor(white: 0.92, alpha: 0.82).cgColor
-            foregroundCreaseLayer.strokeColor = UIColor(white: 0.92, alpha: 0.82).cgColor
-            foregroundCreaseLayer.lineWidth = 2.6
-            foregroundCreaseLayer.lineJoin = .round
-            foregroundCreaseLayer.lineCap = .round
+            container.addSublayer(shadowLayer)
+            container.addSublayer(fillLayer)
+            container.addSublayer(outlineLayer)
 
-            foregroundFillLayer.fillRule = .nonZero
-            foregroundFillLayer.fillColor = UIColor(red: 0.055, green: 0.06, blue: 0.078, alpha: 1.0).cgColor
-            foregroundFillLayer.strokeColor = nil
-
-            volumeShadingLayer.fillColor = nil
-            volumeShadingLayer.strokeColor = UIColor(red: 0.30, green: 0.33, blue: 0.39, alpha: 0.28).cgColor
-            volumeShadingLayer.lineCap = .round
-            volumeShadingLayer.lineJoin = .round
-
-            // Máscara axial en GPU para desvanecer suavemente la muñeca hacia el brazo real.
+            // Desvanecido axial sobre el antebrazo (GPU).
             wristMask.type = .axial
             wristMask.colors = [
                 UIColor.white.cgColor,
                 UIColor.white.cgColor,
-                UIColor(white: 1.0, alpha: 0.42).cgColor,
+                UIColor(white: 1.0, alpha: 0.45).cgColor,
                 UIColor.clear.cgColor
             ]
-            wristMask.locations = [0.0, 0.22, 0.68, 1.0]
-
-            for sub in [
-                outerRimLayer,
-                fresnelLayer,
-                coreBodyLayer,
-                foregroundCreaseLayer,
-                foregroundFillLayer,
-                volumeShadingLayer
-            ] {
-                container.addSublayer(sub)
-            }
+            wristMask.locations = [0.0, 0.30, 0.70, 1.0]
             container.mask = wristMask
         }
 
-        func updateBounds(_ bounds: CGRect) {
+        func applyBounds(_ bounds: CGRect) {
             container.frame = bounds
             wristMask.frame = bounds
-            for sub in [
-                outerRimLayer,
-                fresnelLayer,
-                coreBodyLayer,
-                foregroundCreaseLayer,
-                foregroundFillLayer,
-                volumeShadingLayer
-            ] {
-                sub.frame = bounds
-            }
+            shadowLayer.frame = bounds
+            fillLayer.frame = bounds
+            outlineLayer.frame = bounds
         }
 
         func clear() {
-            outerRimLayer.path = nil
-            fresnelLayer.path = nil
-            coreBodyLayer.path = nil
-            foregroundCreaseLayer.path = nil
-            foregroundFillLayer.path = nil
-            volumeShadingLayer.path = nil
+            shadowLayer.path = nil
+            fillLayer.path = nil
+            outlineLayer.path = nil
         }
     }
 
-    private let handGroups = [HandMeshLayerGroup(), HandMeshLayerGroup()]
-    private let palmButtonLayer = CAShapeLayer()
+    private let groups = [HandMeshGroup(), HandMeshGroup()]
     private let pointerLayer = CAShapeLayer()
-    private let grabDotLayer = CAShapeLayer()
+    private let touchDotLayer = CAShapeLayer()
 
-    /// Largo del rayo espacial (pt).
     static let rayLength: CGFloat = 190
-    /// Permite mostrar la malla 3D low-poly siempre activa encima de los escenarios.
     var showsSkeleton = true
     private var pointerVisible = false
 
@@ -135,25 +86,18 @@ final class HandOverlayView: UIView {
         isOpaque = false
         layer.zPosition = 1000
 
-        for group in handGroups {
-            layer.addSublayer(group.container)
-        }
-
-        palmButtonLayer.fillColor = UIColor(white: 0.12, alpha: 0.72).cgColor
-        palmButtonLayer.strokeColor = UIColor.white.withAlphaComponent(0.85).cgColor
-        palmButtonLayer.lineWidth = 2
+        for group in groups { layer.addSublayer(group.container) }
 
         pointerLayer.fillColor = UIColor.white.cgColor
-        pointerLayer.strokeColor = UIColor.white.withAlphaComponent(0.92).cgColor
+        pointerLayer.strokeColor = UIColor.white.withAlphaComponent(0.9).cgColor
         pointerLayer.lineWidth = 2
 
-        grabDotLayer.fillColor = UIColor.white.withAlphaComponent(0.95).cgColor
-        grabDotLayer.strokeColor = UIColor(red: 0.42, green: 0.86, blue: 1.0, alpha: 0.95).cgColor
-        grabDotLayer.lineWidth = 3
+        touchDotLayer.fillColor = UIColor.clear.cgColor
+        touchDotLayer.strokeColor = UIColor(white: 0.95, alpha: 0.85).cgColor
+        touchDotLayer.lineWidth = 2
 
-        for shape in [palmButtonLayer, pointerLayer, grabDotLayer] {
-            layer.addSublayer(shape)
-        }
+        layer.addSublayer(touchDotLayer)
+        layer.addSublayer(pointerLayer)
     }
 
     required init?(coder: NSCoder) {
@@ -164,73 +108,65 @@ final class HandOverlayView: UIView {
         super.layoutSubviews()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for group in handGroups {
-            group.updateBounds(bounds)
-        }
-        for shape in [palmButtonLayer, pointerLayer, grabDotLayer] {
-            shape.frame = bounds
-        }
+        for group in groups { group.applyBounds(bounds) }
+        touchDotLayer.frame = bounds
+        pointerLayer.frame = bounds
         CATransaction.commit()
     }
 
-    /// Activa o desactiva el rayo puntero cuando la mano apunta a una ventana o menú.
     func setPointer(_ point: CGPoint?) {
         pointerVisible = (point != nil)
     }
 
-    // MARK: - Renderizado de la Malla 3D Low-Poly + Overlay UI
+    // MARK: - Render
 
     func render(poses: [HandPose]) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        for (index, group) in handGroups.enumerated() {
+        for (index, group) in groups.enumerated() {
             if index < poses.count {
-                renderHandMesh(pose: poses[index], into: group)
+                renderSilhouette(pose: poses[index], group: group)
             } else {
                 group.clear()
             }
         }
 
-        // Rayo espacial desde el dedo índice con cursor en la punta.
-        if pointerVisible, let pose = poses.first,
-           let tip = pose.joints[.indexTip] {
+        if pointerVisible, let pose = poses.first, let tip = pose.joints[.indexTip] {
             let base = pose.joints[.indexMCP] ?? pose.joints[.wrist] ?? tip
             let dx = tip.x - base.x
             let dy = tip.y - base.y
-            let length = max(hypot(dx, dy), 1)
-            let end = CGPoint(x: tip.x + dx / length * Self.rayLength,
-                              y: tip.y + dy / length * Self.rayLength)
-
+            let len = max(hypot(dx, dy), 1)
+            let end = CGPoint(x: tip.x + dx / len * Self.rayLength, y: tip.y + dy / len * Self.rayLength)
             let ray = UIBezierPath()
             ray.move(to: tip)
             ray.addLine(to: end)
-            ray.append(UIBezierPath(ovalIn: CGRect(x: end.x - 5.5, y: end.y - 5.5,
-                                                   width: 11, height: 11)))
+            ray.append(UIBezierPath(ovalIn: CGRect(x: end.x - 5, y: end.y - 5, width: 10, height: 10)))
             pointerLayer.path = ray.cgPath
         } else {
             pointerLayer.path = nil
         }
 
-        // Indicador de pinza activa sobre borde de ventana.
-        if let pinchingHand = poses.first(where: { $0.pinch >= 0.55 }) {
-            let radius: CGFloat = 6.5
-            let center = pinchingHand.pinchPoint
-            grabDotLayer.path = UIBezierPath(ovalIn: CGRect(x: center.x - radius,
-                                                            y: center.y - radius,
-                                                            width: radius * 2,
-                                                            height: radius * 2)).cgPath
+        // Aro de contacto para Direct Touch (yema tocando una superficie).
+        if let pose = poses.first,
+           let tip = pose.joints[.indexTip],
+           let target = pose.joints[.indexDIP] {
+            let dx = tip.x - target.x
+            let dy = tip.y - target.y
+            let len = max(hypot(dx, dy), 1)
+            let end = CGPoint(x: tip.x + dx / len * 26, y: tip.y + dy / len * 26)
+            touchDotLayer.path = UIBezierPath(ovalIn: CGRect(x: end.x - 9, y: end.y - 9,
+                                                             width: 18, height: 18)).cgPath
         } else {
-            grabDotLayer.path = nil
+            touchDotLayer.path = nil
         }
 
-        palmButtonLayer.path = nil
         CATransaction.commit()
     }
 
-    // MARK: - Construcción geométrica 3D → Malla Low-Poly con sombreado y fade en muñeca
+    // MARK: - Silueta continua (mano + antebrazo)
 
-    private func renderHandMesh(pose: HandPose, into group: HandMeshLayerGroup) {
+    private func renderSilhouette(pose: HandPose, group: HandMeshGroup) {
         let joints = pose.joints
         guard let wrist = joints[.wrist],
               let middleMCP = joints[.middleMCP] else {
@@ -238,223 +174,282 @@ final class HandOverlayView: UIView {
             return
         }
 
-        let rawPalmScale = hypot(wrist.x - middleMCP.x, wrist.y - middleMCP.y)
-        let palmScale = min(max(rawPalmScale, 18), 280)
+        let scale = min(max(pose.palmScale, 16), 320)
 
-        // Dirección anatómica del antebrazo (desde los nudillos hacia la muñeca).
-        let palmAnchor = averagePoint([
-            joints[.indexMCP],
-            joints[.middleMCP],
-            joints[.ringMCP],
-            joints[.littleMCP]
-        ]) ?? middleMCP
+        // Eje "hacia el pulgar" (radial) en pantalla: sirve para separar el lado
+        // pulgar y el lado meñique sin importar cómo esté rotada la mano.
+        var radial = CGPoint(x: 1, y: 0)
+        if let index = joints[.indexMCP], let little = joints[.littleMCP] {
+            let dx = index.x - little.x
+            let dy = index.y - little.y
+            let len = hypot(dx, dy)
+            if len > 0.5 {
+                radial = CGPoint(x: dx / len, y: dy / len)
+            }
+        } else {
+            let palmDir = CGPoint(x: middleMCP.x - wrist.x, y: middleMCP.y - wrist.y)
+            let len = max(hypot(palmDir.x, palmDir.y), 0.001)
+            radial = CGPoint(x: -palmDir.y / len, y: palmDir.x / len)
+        }
+        let ulnar = CGPoint(x: -radial.x, y: -radial.y)
 
-        var forearmDir = CGPoint(x: wrist.x - palmAnchor.x, y: wrist.y - palmAnchor.y)
-        let dirLen = max(hypot(forearmDir.x, forearmDir.y), 0.001)
-        forearmDir.x /= dirLen
-        forearmDir.y /= dirLen
+        // Dirección del antebrazo: muñeca → codo (Arm Tracking).
+        var armDir = pose.forearm.direction2D
+        let armLen = max(hypot(pose.forearm.elbow2D.x - wrist.x,
+                               pose.forearm.elbow2D.y - wrist.y), scale * 1.1)
 
-        let forearmLen = palmScale * 0.82
-        let forearmEnd = CGPoint(x: wrist.x + forearmDir.x * forearmLen,
-                                 y: wrist.y + forearmDir.y * forearmLen)
+        // Si el codo quedó degenerado, usar la dirección anatómica nudillos → muñeca.
+        if !armDir.x.isFinite || !armDir.y.isFinite || (armDir.x == 0 && armDir.y == 0) {
+            let dx = wrist.x - middleMCP.x
+            let dy = wrist.y - middleMCP.y
+            let len = max(hypot(dx, dy), 0.001)
+            armDir = CGPoint(x: dx / len, y: dy / len)
+        }
 
-        // Actualizar la máscara de gradiente en la muñeca (de opaco en la palma a transparente en el antebrazo).
+        var contour: [CGPoint] = []
+
+        // ---- 1. Borde cubital de la palma: muñeca → meñique ----
+        let wristRadius = scale * 0.30
+        let ulnarStart = offset(wrist, ulnar, wristRadius)
+        contour.append(ulnarStart)
+
+        if let little = joints[.littleMCP] {
+            let midPalm = CGPoint(x: (wrist.x + little.x) * 0.5, y: (wrist.y + little.y) * 0.5)
+            contour.append(offset(midPalm, ulnar, scale * 0.27))
+            contour.append(offset(little, ulnar, scale * 0.15))
+        }
+
+        // ---- 2. Dedos, de meñique a pulgar ----
+        let chains: [[VNHumanHandPoseObservation.JointName]] = [
+            [.littleMCP, .littlePIP, .littleDIP, .littleTip],
+            [.ringMCP, .ringPIP, .ringDIP, .ringTip],
+            [.middleMCP, .middlePIP, .middleDIP, .middleTip],
+            [.indexMCP, .indexPIP, .indexDIP, .indexTip]
+        ]
+
+        // Recorrido: sube por el lado cubital del dedo, rodea la yema y baja por el radial.
+        for (order, chain) in chains.enumerated() {
+            let pts = chain.compactMap { joints[$0] }
+            guard pts.count >= 2 else { continue }
+            let radii = fingerRadii(fingerIndex: 4 - order, scale: scale, count: pts.count)
+
+            appendFinger(contour: &contour, points: pts, radii: radii,
+                         entrySide: ulnar, exitSide: radial,
+                         radial: radial, side: 1.0)
+
+            // Muesca en V hacia el dedo siguiente.
+            if order < chains.count - 1,
+               let a = pts.first,
+               let nextChain = chains.indices.contains(order + 1) ? chains[order + 1].last : nil,
+               let b = joints[nextChain] {
+                let web = CGPoint(x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5)
+                let towardWrist = CGPoint(x: wrist.x - web.x, y: wrist.y - web.y)
+                let wl = max(hypot(towardWrist.x, towardWrist.y), 0.001)
+                let depth = scale * 0.16
+                contour.append(CGPoint(x: web.x + towardWrist.x / wl * depth,
+                                       y: web.y + towardWrist.y / wl * depth))
+            }
+        }
+
+        // ---- 3. Pulgar: sube por el lado cubital, punta, baja por el radial ----
+        let thumbChain: [VNHumanHandPoseObservation.JointName] = [.thumbCMC, .thumbMP, .thumbIP, .thumbTip]
+        let thumbPts = thumbChain.compactMap { joints[$0] }
+        if thumbPts.count >= 2 {
+            // Muesca entre índice y pulgar (más profunda, primer interóseo dorsal).
+            if let indexMCP = joints[.indexMCP] {
+                let web = CGPoint(x: (thumbPts[0].x + indexMCP.x) * 0.5,
+                                  y: (thumbPts[0].y + indexMCP.y) * 0.5)
+                let towardWrist = CGPoint(x: wrist.x - web.x, y: wrist.y - web.y)
+                let wl = max(hypot(towardWrist.x, towardWrist.y), 0.001)
+                contour.append(CGPoint(x: web.x + towardWrist.x / wl * scale * 0.20,
+                                       y: web.y + towardWrist.y / wl * scale * 0.20))
+            }
+            let radii = fingerRadii(fingerIndex: 0, scale: scale, count: thumbPts.count)
+            appendFinger(contour: &contour, points: thumbPts, radii: radii,
+                         entrySide: ulnar, exitSide: radial,
+                         radial: radial, side: 1.0)
+        }
+
+        // ---- 4. Borde radial (tenar) de la palma: pulgar → muñeca ----
+        let radialStart = offset(wrist, radial, wristRadius)
+        contour.append(offset(CGPoint(x: (wrist.x + (joints[.indexMCP]?.x ?? wrist.x)) * 0.5,
+                                      y: (wrist.y + (joints[.indexMCP]?.y ?? wrist.y)) * 0.5),
+                              radial, scale * 0.26))
+        contour.append(radialStart)
+
+        // ---- 5. Antebrazo: baja por el radial, rodea el extremo y sube por el cubital ----
+        let elbow = CGPoint(x: wrist.x + armDir.x * armLen, y: wrist.y + armDir.y * armLen)
+        let armRadius = scale * 0.28
+        let perp = CGPoint(x: -armDir.y, y: armDir.x)
+
+        // Lado radial del antebrazo
+        appendLine(&contour, from: radialStart,
+                   to: CGPoint(x: elbow.x - perp.x * armRadius, y: elbow.y - perp.y * armRadius),
+                   steps: 3)
+
+        // Extremo del brazo (semicírculo) — queda oculto por el fade de la máscara.
+        let capAngleStart = atan2(-perp.y, -perp.x)
+        let capAngleEnd = atan2(perp.y, perp.x)
+        appendArc(&contour, center: elbow, radius: armRadius,
+                  from: capAngleStart, to: capAngleEnd, clockwise: true, steps: 8)
+
+        // Lado cubital del antebrazo de vuelta a la muñeca
+        appendLine(&contour, from: CGPoint(x: elbow.x + perp.x * armRadius, y: elbow.y + perp.y * armRadius),
+                   to: ulnarStart, steps: 3)
+
+        guard contour.count >= 8 else { group.clear(); return }
+
+        // ---- 6. Construir el path con winding positivo (sin huecos) ----
+        let path = CGMutablePath()
+        let ordered = positiveWinding(contour)
+        path.move(to: ordered[0])
+        for i in 1..<ordered.count { path.addLine(to: ordered[i]) }
+        path.closeSubpath()
+
+        // Máscara de desvanecido a lo largo del antebrazo (de la muñeca hacia el codo).
         let w = max(bounds.width, 1)
         let h = max(bounds.height, 1)
-        let maskStart = CGPoint(x: wrist.x - forearmDir.x * (palmScale * 0.24),
-                                y: wrist.y - forearmDir.y * (palmScale * 0.24))
-        let maskEnd = CGPoint(x: wrist.x + forearmDir.x * (forearmLen * 0.86),
-                              y: wrist.y + forearmDir.y * (forearmLen * 0.86))
-        group.wristMask.startPoint = CGPoint(x: maskStart.x / w, y: maskStart.y / h)
-        group.wristMask.endPoint = CGPoint(x: maskEnd.x / w, y: maskEnd.y / h)
+        let maskFrom = CGPoint(x: wrist.x - armDir.x * (scale * 0.55),
+                               y: wrist.y - armDir.y * (scale * 0.55))
+        let maskTo = CGPoint(x: wrist.x + armDir.x * (armLen * 0.92),
+                             y: wrist.y + armDir.y * (armLen * 0.92))
+        group.wristMask.startPoint = CGPoint(x: maskFrom.x / w, y: maskFrom.y / h)
+        group.wristMask.endPoint = CGPoint(x: maskTo.x / w, y: maskTo.y / h)
 
-        let fullSilhouette = CGMutablePath()
-        let volumeShading = CGMutablePath()
+        // Grosor del contorno según profundidad real (más cerca = línea algo más marcada).
+        let depthFactor = CGFloat(min(max(0.65 / max(CGFloat(pose.depthMeters), 0.10), 0.75), 1.8))
+        group.outlineLayer.lineWidth = 1.55 * depthFactor
+        group.outlineLayer.strokeColor = UIColor(white: 0.93, alpha: 0.92).cgColor
+        group.fillLayer.fillColor = UIColor(white: 0.115, alpha: 0.58).cgColor
 
-        // 1. Extensión de muñeca / antebrazo (se desvanece antes del extremo final gracias al wristMask).
-        let wristRadius = palmScale * 0.31
-        let forearmRadius = palmScale * 0.28
-        Self.addTaperedCapsule(to: fullSilhouette,
-                               from: wrist,
-                               to: forearmEnd,
-                               rA: wristRadius,
-                               rB: forearmRadius)
+        group.fillLayer.path = path
+        group.fillLayer.shadowColor = UIColor.black.cgColor
+        group.fillLayer.shadowOpacity = 0.0
+        group.outlineLayer.path = path
 
-        // 2. Malla de la palma + membranas interdigitales (webbing anatómico).
-        addPalmAndWebbing(joints: joints, palmScale: palmScale, to: fullSilhouette)
-
-        // 3. Los 19 huesos articulados cónicos (Tapered Phalanx Capsules).
-        let sortedBones = pose.bones3D.sorted { $0.depthMeters > $1.depthMeters } // de más lejos a más cerca
-        for bone in sortedBones {
-            let r0 = palmScale * bone.definition.radiusStartRatio
-            let r1 = palmScale * bone.definition.radiusEndRatio
-            Self.addTaperedCapsule(to: fullSilhouette,
-                                   from: bone.start2D,
-                                   to: bone.end2D,
-                                   rA: r0,
-                                   rB: r1)
-
-            // Cresta de iluminación 3D central en las falanges visibles.
-            if bone.definition.segmentIndex >= 1 {
-                volumeShading.move(to: bone.start2D)
-                volumeShading.addLine(to: bone.end2D)
-            }
-        }
-
-        // 4. Auto-oclusión 3D (pliegue blanco sutil para dedos que pasan por delante de la palma
-        //    o de otros dedos según la profundidad real LiDAR).
-        let foregroundPath = CGMutablePath()
-        let palmDepth = pose.depthMeters
-        for bone in sortedBones where bone.definition.segmentIndex >= 1 {
-            // Si la falange está más cerca de la cámara que el plano medio de la palma (o es el pulgar en escorzo).
-            if bone.depthMeters < palmDepth - 0.008 || bone.definition.fingerIndex == 0 {
-                let r0 = palmScale * bone.definition.radiusStartRatio * 0.96
-                let r1 = palmScale * bone.definition.radiusEndRatio * 0.96
-                Self.addTaperedCapsule(to: foregroundPath,
-                                       from: bone.start2D,
-                                       to: bone.end2D,
-                                       rA: r0,
-                                       rB: r1)
-            }
-        }
-
-        // Ajustar grosores proporcionalmente al tamaño aparente/métrico de la mano.
-        let rimScale = min(max(palmScale / 85.0, 0.72), 1.45)
-        group.outerRimLayer.lineWidth = 4.6 * rimScale
-        group.fresnelLayer.lineWidth = 1.6 * rimScale
-        group.foregroundCreaseLayer.lineWidth = 2.4 * rimScale
-        group.volumeShadingLayer.lineWidth = max(2.2, palmScale * 0.085)
-
-        group.outerRimLayer.path = fullSilhouette
-        group.fresnelLayer.path = fullSilhouette
-        group.coreBodyLayer.path = fullSilhouette
-        group.foregroundCreaseLayer.path = foregroundPath
-        group.foregroundFillLayer.path = foregroundPath
-        group.volumeShadingLayer.path = volumeShading
+        // Sombra de contacto desplazada: sensación de volumen sobre el escenario.
+        let shadowPath = CGMutablePath()
+        shadowPath.addPath(path, transform: CGAffineTransform(translationX: 3, y: 6))
+        group.shadowLayer.path = shadowPath
+        group.shadowLayer.fillColor = UIColor.black.withAlphaComponent(0.24).cgColor
+        group.shadowLayer.compositingFilter = nil
     }
 
-    /// Construye el volumen anatómico de la palma, eminencia tenar/hipotenar y membranas interdigitales.
-    private func addPalmAndWebbing(joints: [VNHumanHandPoseObservation.JointName: CGPoint],
-                                   palmScale: CGFloat,
-                                   to path: CGMutablePath) {
-        guard let wrist = joints[.wrist] else { return }
+    // MARK: - Dedos
 
-        // Puntos de membrana interdigital (~26% desde el nudillo MCP hacia la falange PIP).
-        let indexWeb = lerpPoint(joints[.indexMCP], joints[.indexPIP], t: 0.26)
-        let middleWeb = lerpPoint(joints[.middleMCP], joints[.middlePIP], t: 0.26)
-        let ringWeb = lerpPoint(joints[.ringMCP], joints[.ringPIP], t: 0.26)
-        let littleWeb = lerpPoint(joints[.littleMCP], joints[.littlePIP], t: 0.24)
-        let thumbWeb = lerpPoint(joints[.thumbMP], joints[.thumbIP], t: 0.28)
+    private func fingerRadii(fingerIndex: Int, scale: CGFloat, count: Int) -> [CGFloat] {
+        let defs = HandTracker.boneDefinitions
+            .filter { $0.fingerIndex == fingerIndex }
+            .sorted { $0.segmentIndex < $1.segmentIndex }
+        var radii = defs.map { scale * $0.radiusStartRatio }
+        if let last = defs.last { radii.append(scale * last.radiusEndRatio) }
+        while radii.count < count { radii.append(radii.last ?? scale * 0.1) }
+        if radii.count > count { radii = Array(radii.prefix(count - 1)) + [radii[count - 1]] }
+        return radii
+    }
 
-        // Cápsulas transversales en el arco metacarpiano y la base de la palma para suavizar uniones.
-        let bridgePairs: [(CGPoint?, CGPoint?, CGFloat, CGFloat)] = [
-            (joints[.indexMCP], joints[.middleMCP], 0.19, 0.19),
-            (joints[.middleMCP], joints[.ringMCP], 0.19, 0.18),
-            (joints[.ringMCP], joints[.littleMCP], 0.18, 0.16),
-            (indexWeb, middleWeb, 0.145, 0.145),
-            (middleWeb, ringWeb, 0.145, 0.140),
-            (ringWeb, littleWeb, 0.135, 0.125),
-            (joints[.thumbCMC], joints[.indexMCP], 0.22, 0.19),
-            (joints[.thumbMP], indexWeb, 0.16, 0.14),
-            (thumbWeb, joints[.indexMCP], 0.13, 0.15),
-            (wrist, joints[.thumbCMC], 0.28, 0.23),
-            (wrist, joints[.littleMCP], 0.27, 0.18)
-        ]
+    /// Añade al contorno un dedo completo: lado de entrada → punta redondeada → lado de salida.
+    private func appendFinger(contour: inout [CGPoint],
+                              points: [CGPoint],
+                              radii: [CGFloat],
+                              entrySide: CGPoint,
+                              exitSide: CGPoint,
+                              radial: CGPoint,
+                              side: CGFloat) {
+        guard points.count >= 2, radii.count >= 2 else { return }
+        _ = radial
+        _ = side
 
-        for (a, b, rA, rB) in bridgePairs {
-            if let p0 = a, let p1 = b {
-                Self.addTaperedCapsule(to: path,
-                                       from: p0,
-                                       to: p1,
-                                       rA: palmScale * rA,
-                                       rB: palmScale * rB)
-            }
+        // Lado de entrada (de la base hacia la punta).
+        for i in 0..<points.count {
+            contour.append(offset(points[i], entrySide, radii[min(i, radii.count - 1)]))
         }
 
-        // Polígono central relleno de la palma (con winding positivo garantizado).
-        let hullCandidates: [CGPoint?] = [
-            wrist,
-            joints[.thumbCMC],
-            joints[.thumbMP],
-            indexWeb ?? joints[.indexMCP],
-            middleWeb ?? joints[.middleMCP],
-            ringWeb ?? joints[.ringMCP],
-            littleWeb ?? joints[.littleMCP]
-        ]
-        let hull = hullCandidates.compactMap { $0 }
-        if hull.count >= 4 {
-            Self.addPositiveWindingPolygon(points: hull, to: path)
+        // Punta: semicírculo del lado de entrada al de salida.
+        let tip = points[points.count - 1]
+        let prev = points[points.count - 2]
+        let dirAngle = atan2(tip.y - prev.y, tip.x - prev.x)
+
+        // Ángulos absolutos de cada lado en la punta.
+        let entryAngle = angleOfVector(entrySide)
+        let exitAngle = angleOfVector(exitSide)
+
+        let rTip = radii[radii.count - 1] * 0.95
+        appendArc(&contour, center: tip, radius: rTip,
+                  from: entryAngle, to: exitAngle,
+                  clockwise: false, steps: 7,
+                  referenceDirection: dirAngle)
+
+        // Lado de salida (de la punta hacia la base).
+        for i in stride(from: points.count - 1, through: 0, by: -1) {
+            contour.append(offset(points[i], exitSide, radii[min(i, radii.count - 1)]))
         }
     }
 
-    // MARK: - Primitivas geométricas con Winding Positivo (sin huecos bajo fillRule = .nonZero)
-
-    private static func addTaperedCapsule(to path: CGMutablePath,
-                                          from a: CGPoint,
-                                          to b: CGPoint,
-                                          rA: CGFloat,
-                                          rB: CGFloat) {
-        let dx = b.x - a.x
-        let dy = b.y - a.y
-        let dist = hypot(dx, dy)
-        let safeRA = max(rA, 1.0)
-        let safeRB = max(rB, 1.0)
-
-        if dist < 0.5 {
-            let r = max(safeRA, safeRB)
-            path.move(to: CGPoint(x: a.x + r, y: a.y))
-            path.addArc(center: a, radius: r, startAngle: 0, endAngle: .pi * 2, clockwise: false)
-            path.closeSubpath()
-            return
-        }
-
-        let angle = atan2(dy, dx)
-        let startA = angle - .pi * 0.5
-        let endA = angle + .pi * 0.5
-
-        let p0 = CGPoint(x: a.x + cos(startA) * safeRA, y: a.y + sin(startA) * safeRA)
-        let p1 = CGPoint(x: b.x + cos(startA) * safeRB, y: b.y + sin(startA) * safeRB)
-        let p2 = CGPoint(x: a.x + cos(endA) * safeRA, y: a.y + sin(endA) * safeRA)
-
-        path.move(to: p0)
-        path.addLine(to: p1)
-        path.addArc(center: b, radius: safeRB, startAngle: startA, endAngle: endA, clockwise: false)
-        path.addLine(to: p2)
-        path.addArc(center: a, radius: safeRA, startAngle: endA, endAngle: startA + .pi * 2, clockwise: false)
-        path.closeSubpath()
+    private func angleOfVector(_ v: CGPoint) -> CGFloat {
+        atan2(v.y, v.x)
     }
 
-    private static func addPositiveWindingPolygon(points: [CGPoint], to path: CGMutablePath) {
-        guard points.count >= 3 else { return }
+    // MARK: - Primitivas
+
+    private func offset(_ p: CGPoint, _ dir: CGPoint, _ r: CGFloat) -> CGPoint {
+        CGPoint(x: p.x + dir.x * r, y: p.y + dir.y * r)
+    }
+
+    private func appendLine(_ contour: inout [CGPoint], from a: CGPoint, to b: CGPoint, steps: Int) {
+        let safeSteps = max(steps, 1)
+        for i in 1...safeSteps {
+            let t = CGFloat(i) / CGFloat(safeSteps)
+            contour.append(CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t))
+        }
+    }
+
+    /// Añade puntos de arco tomando el camino más corto entre los dos ángulos.
+    private func appendArc(_ contour: inout [CGPoint],
+                           center: CGPoint,
+                           radius: CGFloat,
+                           from startAngle: CGFloat,
+                           to endAngle: CGFloat,
+                           clockwise: Bool,
+                           steps: Int,
+                           referenceDirection: CGFloat? = nil) {
+        var delta = endAngle - startAngle
+        while delta <= -.pi { delta += .pi * 2 }
+        while delta > .pi { delta -= .pi * 2 }
+
+        // La punta tiene que abombarse en la dirección del dedo: si el punto medio del
+        // arco no coincide con esa dirección, se recorre por el otro lado.
+        if let ref = referenceDirection {
+            let outward = normalizeAngle(ref - (startAngle + delta * 0.5))
+            if abs(outward) > .pi * 0.45 {
+                delta = delta > 0 ? delta - .pi * 2 : delta + .pi * 2
+            }
+        }
+        _ = clockwise
+
+        let safeSteps = max(steps, 3)
+        for i in 0...safeSteps {
+            let t = CGFloat(i) / CGFloat(safeSteps)
+            let a = startAngle + delta * t
+            contour.append(CGPoint(x: center.x + cos(a) * radius,
+                                   y: center.y + sin(a) * radius))
+        }
+    }
+
+    private func normalizeAngle(_ a: CGFloat) -> CGFloat {
+        var v = a
+        while v <= -.pi { v += .pi * 2 }
+        while v > .pi { v -= .pi * 2 }
+        return v
+    }
+
+    private func positiveWinding(_ points: [CGPoint]) -> [CGPoint] {
         var area: CGFloat = 0
         for i in 0..<points.count {
-            let p1 = points[i]
-            let p2 = points[(i + 1) % points.count]
-            area += (p1.x * p2.y - p2.x * p1.y)
+            let a = points[i]
+            let b = points[(i + 1) % points.count]
+            area += (a.x * b.y - b.x * a.y)
         }
-        let ordered = area >= 0 ? points : Array(points.reversed())
-        path.move(to: ordered[0])
-        for i in 1..<ordered.count {
-            path.addLine(to: ordered[i])
-        }
-        path.closeSubpath()
-    }
-
-    private func lerpPoint(_ a: CGPoint?, _ b: CGPoint?, t: CGFloat) -> CGPoint? {
-        guard let a else { return b }
-        guard let b else { return a }
-        return CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
-    }
-
-    private func averagePoint(_ points: [CGPoint?]) -> CGPoint? {
-        let valid = points.compactMap { $0 }
-        guard !valid.isEmpty else { return nil }
-        var sx: CGFloat = 0
-        var sy: CGFloat = 0
-        for pt in valid {
-            sx += pt.x
-            sy += pt.y
-        }
-        return CGPoint(x: sx / CGFloat(valid.count), y: sy / CGFloat(valid.count))
+        return area >= 0 ? points : Array(points.reversed())
     }
 }

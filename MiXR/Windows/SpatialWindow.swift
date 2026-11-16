@@ -111,6 +111,10 @@ final class SpatialWindow {
     var pressAt: ((CGPoint) -> Bool)?
     /// El dedo se movió sobre el menú (nil = no hay dedo cerca). dt en segundos.
     var hoverAt: ((CGPoint?, CGFloat) -> Void)?
+    /// Scroll por gesto de pinza mantenida + movimiento (punto del host, delta en puntos).
+    var scrollAt: ((CGPoint, CGSize) -> Bool)?
+    /// Clic / toque directo sobre el contenido (punto en coordenadas del host).
+    var clickAt: ((CGPoint) -> Bool)?
 
     init(kind: WindowKind, position: simd_float3, physicalWidth: CGFloat, view: SpatialWindowView) {
         self.kind = kind
