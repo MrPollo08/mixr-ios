@@ -105,6 +105,10 @@ final class XRSession: NSObject, ObservableObject {
     private let predictionHorizon: CFTimeInterval = 0.045
     private let predictionMaxShiftRatio: CGFloat = 0.28
 
+    // Respaldo automático de la mano fantasma.
+    private var ghostMissCount = 0
+    private var autoMeshFallback = false
+
     lazy var containerView: UIView = {
         let view = UIView(frame: .zero)
         view.backgroundColor = .black
@@ -165,6 +169,32 @@ final class XRSession: NSObject, ObservableObject {
 
     @objc private func handleTripleTap() {
         toggleHandVisual()
+    }
+
+    /// Si la mano fantasma no logra dibujar nada durante ~1,5 s aunque haya mano
+    /// detectada, se enciende la malla sintética como respaldo. Cuando el recorte
+    /// vuelve, se apaga sola.
+    private func updateGhostFallback() {
+        guard ghostHandEnabled else {
+            ghostMissCount = 0
+            return
+        }
+
+        if ghostView.hasContent {
+            ghostMissCount = 0
+            if autoMeshFallback {
+                autoMeshFallback = false
+                overlay.showsSkeleton = false
+            }
+            return
+        }
+
+        guard !lastHands.isEmpty else { return }
+        ghostMissCount += 1
+        if ghostMissCount > 90, !autoMeshFallback {
+            autoMeshFallback = true
+            overlay.showsSkeleton = true
+        }
     }
 
     /// Alterna entre **mano fantasma** (segmentación, por defecto) y la malla sintética.
@@ -490,6 +520,7 @@ final class XRSession: NSObject, ObservableObject {
         ghostView.update(buffer: frame.capturedImage,
                          hands: lastHands,
                          orientation: orientation)
+        updateGhostFallback()
 
         if stereoEnabled {
             updateStereoPanes(pose: pose, buffer: frame.capturedImage, cameraSize: rect.size)

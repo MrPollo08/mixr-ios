@@ -24,12 +24,12 @@ final class HandGhostView: UIView {
     /// Opacidad de la mano recortada. La referencia está en ~0.6.
     private static let handAlpha: CGFloat = 0.62
     /// Cuánto se aclara la mano respecto de la imagen original.
-    private static let brightnessLift: CGFloat = 0.11
-    private static let contrastLift: CGFloat = 1.08
-    /// Intensidad y difusión del contorno blanco.
-    private static let edgeIntensity: CGFloat = 2.6
-    private static let edgeBlurRadius: CGFloat = 2.2
-    private static let edgeAlpha: CGFloat = 0.95
+    private static let brightnessLift: CGFloat = 0.14
+    private static let contrastLift: CGFloat = 1.10
+    /// Ancho del contorno blanco (en puntos) y difusión del halo.
+    private static let contourWidth: CGFloat = 2.6
+    private static let contourBlurRadius: CGFloat = 1.5
+    private static let contourAlpha: CGFloat = 1.0
 
     /// El compuesto se calcula a media resolución y la capa lo estira: 4× menos píxeles.
     private static let outputScale: CGFloat = 0.5
@@ -175,6 +175,11 @@ final class HandGhostView: UIView {
         personMask = nil
     }
 
+    /// `true` si hay un compuesto en pantalla (lo usa la sesión para auto-respaldo).
+    var hasContent: Bool {
+        imageLayer.contents != nil
+    }
+
     /// Pide la máscara de persona a Vision (Neural Engine) sin bloquear.
     private func requestSegmentationIfNeeded(_ buffer: CVPixelBuffer) {
         let now = CACurrentMediaTime()
@@ -310,20 +315,27 @@ final class HandGhostView: UIView {
             kCIInputBackgroundImageKey: clear
         ])
 
-        // --- Contorno blanco + halo (derivado de la máscara) ---
-        let edges = mask
-            .applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: Self.edgeIntensity])
+        // --- Contorno blanco + halo ---
+        // Se calcula por morfología: (máscara dilatada − máscara) da una banda de ancho
+        // fijo pegada al borde de la silueta. Es determinista, no depende de la pendiente
+        // de la máscara (que era el fallo del intento con `CIEdges`: la máscara ya venía
+        // desenfocada, los bordes daban ~0 y el contorno quedaba invisible).
+        let dilated = mask.applyingFilter("CIMorphologyMaximum", parameters: [
+            kCIInputRadiusKey: Self.contourWidth
+        ])
+        let band = dilated
+            .applyingFilter("CISubtractBlendMode", parameters: [kCIInputBackgroundImageKey: mask])
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: Self.contourBlurRadius])
             .applyingFilter("CIColorMatrix", parameters: [
                 "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
                 "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
                 "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputAVector": CIVector(x: Self.edgeAlpha, y: 0, z: 0, w: 0),
+                "inputAVector": CIVector(x: Self.contourAlpha, y: 0, z: 0, w: 0),
                 "inputBiasVector": CIVector(x: 1, y: 1, z: 1, w: 0)
             ])
-            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: Self.edgeBlurRadius])
             .cropped(to: rect)
 
-        let composed = edges.composited(over: handCut)
+        let composed = band.composited(over: handCut)
 
         // --- Salida a media resolución ---
         let output = composed.transformed(by: CGAffineTransform(scaleX: Self.outputScale,
