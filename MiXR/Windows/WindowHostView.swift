@@ -253,17 +253,6 @@ final class WindowHostView: UIView {
         let facing = facingSign(window: window, pose: pose)
         window.view.setShowingBack(facing < 0)
 
-        // Iluminación del cristal según desde dónde la mirás.
-        let cameraPosition = simd_float3(pose.transform.columns.3.x,
-                                         pose.transform.columns.3.y,
-                                         pose.transform.columns.3.z)
-        let delta = cameraPosition - window.position
-        let lateral = simd_dot(delta, right) / max(simd_length(delta), 0.01)
-        let vertical = simd_dot(delta, up) / max(simd_length(delta), 0.01)
-        window.view.updateLighting(facing: facing,
-                                   lateral: CGFloat(lateral),
-                                   vertical: CGFloat(vertical))
-
         let base = window.view.baseSize
         guard base.width > 1, base.height > 1 else { return }
 
@@ -273,6 +262,18 @@ final class WindowHostView: UIView {
         if simd_length(right) < 0.01 { right = simd_float3(1, 0, 0) }
         right = simd_normalize(right)
         let up = simd_normalize(simd_cross(normal, right))
+
+        // Iluminación del cristal según desde dónde la mirás.
+        let cameraPosition = simd_float3(pose.transform.columns.3.x,
+                                         pose.transform.columns.3.y,
+                                         pose.transform.columns.3.z)
+        let delta = cameraPosition - window.position
+        let distanceToCamera = max(simd_length(delta), 0.01)
+        let lateral = simd_dot(delta, right) / distanceToCamera
+        let vertical = simd_dot(delta, up) / distanceToCamera
+        window.view.updateLighting(facing: facing,
+                                   lateral: CGFloat(lateral),
+                                   vertical: CGFloat(vertical))
 
         let halfWidth = Float(window.physicalWidth) * 0.5
         let halfHeight = halfWidth * Float(base.height / base.width)
