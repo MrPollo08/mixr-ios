@@ -466,18 +466,26 @@ final class WindowHostView: UIView {
 
     // MARK: - Hit testing
 
+    /// Rectángulo visible de una ventana en pantalla. Se usa para todo el hit-testing:
+    /// `view.frame` no sirve porque el panel se dibuja con una transformación proyectiva
+    /// (no afín) y su "frame" de UIKit no coincide con lo que se ve.
+    private func hitRect(for window: SpatialWindow, margin: CGFloat = 0) -> CGRect? {
+        guard let rect = screenFrame(for: window) else { return nil }
+        return rect.insetBy(dx: -margin, dy: -margin)
+    }
+
     /// Ventana bajo el punto o cerca (margen): sirve para mostrar el cursor
     /// cuando la mano se acerca, sin tener que estar justo encima.
     func window(near point: CGPoint, margin: CGFloat = 46) -> SpatialWindow? {
         for window in windows.reversed() where !window.view.isHidden {
-            if window.view.frame.insetBy(dx: -margin, dy: -margin).contains(point) { return window }
+            if let rect = hitRect(for: window, margin: margin), rect.contains(point) { return window }
         }
         return nil
     }
 
     func window(at point: CGPoint) -> SpatialWindow? {
         for window in windows.reversed() where !window.view.isHidden {
-            if window.view.frame.contains(point) { return window }
+            if let rect = hitRect(for: window), rect.contains(point) { return window }
         }
         return nil
     }
@@ -486,8 +494,9 @@ final class WindowHostView: UIView {
     /// agarrar el monitor (el centro queda libre para el contenido).
     func window(nearBorder point: CGPoint, margin: CGFloat = 54) -> SpatialWindow? {
         for window in windows.reversed() where !window.view.isHidden {
-            let outer = window.view.frame.insetBy(dx: -margin, dy: -margin)
-            let inner = window.view.frame.insetBy(dx: margin, dy: margin)
+            guard let rect = hitRect(for: window) else { continue }
+            let outer = rect.insetBy(dx: -margin, dy: -margin)
+            let inner = rect.insetBy(dx: margin, dy: margin)
             if outer.contains(point), !inner.contains(point) { return window }
         }
         return nil

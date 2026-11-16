@@ -474,54 +474,27 @@ final class XRSession: NSObject, ObservableObject {
         }
     }
 
-    /// Cambia entre autofoco continuo y enfoque bloqueado.
+    /// Fuerza a la cámara a reenfocar (botón X del mando).
     func toggleAutofocus() {
-        autofocusEnabled.toggle()
-        startARKit(forceReset: false)
-        status = autofocusEnabled ? "Autofoco continuo" : "Enfoque bloqueado"
+        refocusNow()
     }
 
     // MARK: - Enfoque: "enfocar y congelar"
 
-    /// El truco para una mano nítida: se deja el autofoco **encendido** el tiempo
-    /// suficiente para que la lente se vaya a la distancia de la mano, y recién ahí se
-    /// apaga. `isAutoFocusEnabled = false` congela la lente donde está: sin caza, pero
-    /// enfocada en tu mano en vez de en el fondo.
+    /// Fuerza a la cámara a volver a enfocar.
     ///
-    /// Con `delay` en 0 el foco se congela de inmediato (queda donde esté).
-    func lockFocus(after delay: TimeInterval) {
+    /// No se apaga `isAutoFocusEnabled`: eso **no** congela el foco donde está, lo
+    /// clava en una posición fija lejana (probado en el teléfono: dejaba todo borroso).
+    /// Reiniciar la sesión con el autofoco encendido es lo que hace que la lente vuelva
+    /// a buscar el sujeto que tiene delante.
+    func refocusNow() {
         focusLockWork?.cancel()
-
-        if delay <= 0 {
-            autofocusEnabled = false
-            startARKit(forceReset: false)
-            status = "Enfoque fijado"
-            return
-        }
-
-        // 1) Autofoco encendido: que busque el sujeto cercano.
-        if !autofocusEnabled {
-            autofocusEnabled = true
-            startARKit(forceReset: false)
-        }
-
-        // 2) Pasado el tiempo, congelar.
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.autofocusEnabled else { return }
-            self.autofocusEnabled = false
-            self.startARKit(forceReset: false)
-            self.status = "Enfoque fijado"
-        }
-        focusLockWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        autofocusEnabled = true
+        startARKit(forceReset: false)
+        status = "Reenfocando…"
     }
 
     /// Vuelve a enfocar sobre lo que hay delante ahora (doble toque).
-    func refocusNow() {
-        lockFocus(after: 0.85)
-        status = "Enfocando…"
-    }
-
     // MARK: - Eventos de gestos
 
     private func handle(_ event: GestureEvent) {
@@ -595,14 +568,18 @@ final class XRSession: NSObject, ObservableObject {
         framing = (framing + 1) % 3
     }
 
+    /// Recentra la orientación y trae todas las ventanas al frente.
     func centerWindows() {
         headTracker.recenterGyro()
+        bringWindowsInFront()
+    }
+
+    /// Reposiciona las ventanas delante de la cámara **sin** tocar el giroscopio.
+    /// Lo usa el rescate automático cuando una ventana queda fuera de cuadro.
+    private func bringWindowsInFront() {
         for window in hostView.windows {
-            if window === monitor {
-                hostView.setPosition(window, positionInFront(distance: 1.6), force: true)
-            } else {
-                hostView.setPosition(window, positionInFront(distance: Config.windowDistance), force: true)
-            }
+            let distance = (window === monitor) ? Float(1.6) : Config.windowDistance
+            hostView.setPosition(window, positionInFront(distance: distance), force: true)
             window.smoothedCenter = nil
             reanchor(window)
         }
@@ -781,12 +758,14 @@ final class XRSession: NSObject, ObservableObject {
         gestures.update(poses: displayHands, host: hostView, pose: pose)
         syncAnchors(dragging: gestures.isDragging || gamepadMoving)
 
-        // Mano fantasma: se alimenta con el frame *actual* de la cámara (60 Hz) y ella
-        // misma limita la segmentación (~30 Hz). Así el recorte va pegado al video.
-        ghostView.update(buffer: frame.capturedImage,
-                         hands: lastHands,
-                         orientation: orientation,
-                         segmentationBuffer: inferenceBuffer)
+        // Mano fantasma: sólo se alimenta si está visible. Cuando el visual activo es la
+        // malla, correr la segmentación igual gastaba batería para nada.
+        if ghostHandEnabled {
+            ghostView.update(buffer: frame.capturedImage,
+                             hands: lastHands,
+                             orientation: orientation,
+                             segmentationBuffer: inferenceBuffer)
+        }
         updateGhostFallback()
 
         if stereoEnabled {
@@ -954,7 +933,7 @@ final class XRSession: NSObject, ObservableObject {
             // si no, es imposible encontrarla girando la cabeza.
             if now - since > 2.0 {
                 offscreenSince = nil
-                centerWindows()
+                bringWindowsInFront()
             }
         } else {
             offscreenSince = now

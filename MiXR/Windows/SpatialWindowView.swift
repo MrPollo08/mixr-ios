@@ -122,6 +122,7 @@ final class SpatialWindowView: UIView {
         sheen.startPoint = CGPoint(x: 0.15, y: 0.0)
         sheen.endPoint = CGPoint(x: 0.85, y: 1.0)
         sheen.cornerRadius = 22
+        sheen.zPosition = 10
         card.layer.addSublayer(sheen)
 
         blur.frame = card.bounds
