@@ -1,4 +1,4 @@
-name: Build IPA
+﻿name: Build IPA
 
 # Compila MiXR en un runner macOS de GitHub y publica un .ipa sin firmar
 # como artifact descargable. No hace falta tener un Mac.
@@ -30,15 +30,20 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Install CocoaPods dependencies
+        run: |
+          pod --version || brew install cocoapods
+          pod install --repo-update
+
       - name: Build (unsigned)
         run: |
           set -o pipefail
           xcodebuild \
-            -project MiXR.xcodeproj \
-            -target MiXR \
+            -workspace MiXR.xcworkspace \
+            -scheme MiXR \
             -configuration Release \
             -sdk iphoneos \
-            SYMROOT=build \
+            -derivedDataPath build \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
@@ -47,7 +52,7 @@ jobs:
 
       - name: Package IPA
         run: |
-          APP_PATH="$(find build -maxdepth 5 -name 'MiXR.app' -type d | head -n 1)"
+          APP_PATH="$(find build -maxdepth 8 -name 'MiXR.app' -type d | head -n 1)"
           if [ -z "$APP_PATH" ]; then
             echo "No se generó la app. Últimas 200 líneas del log:"
             tail -n 200 xcodebuild.log

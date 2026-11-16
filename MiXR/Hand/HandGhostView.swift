@@ -21,20 +21,23 @@ final class HandGhostView: UIView {
 
     // MARK: - Ajustes visuales (calibrables contra la referencia)
 
-    /// La mano se pinta como **material claro translúcido**, no con los píxeles de la
-    /// cámara: al superponer la misma mano oscura sobre sí misma se reforzaba el negro
-    /// y quedaba un bloque sólido.
+    /// La mano se pinta como **gris oscuro translúcido** con borde fino claro: sobre un
+    /// panel negro se lee como una silueta oscura, y sobre el mundo real como un tinte.
+    /// Así es la referencia: oscura, no blanca.
     private static let fillStrength: CGFloat = 0.72
+    private static let fillRed: CGFloat = 0.30
+    private static let fillGreen: CGFloat = 0.30
+    private static let fillBlue: CGFloat = 0.33
     /// Opacidad final del recorte.
-    private static let handAlpha: CGFloat = 0.82
-    /// Contorno fino y suave (antes era grueso y duro).
+    private static let handAlpha: CGFloat = 0.92
+    /// Contorno fino y suave.
     private static let contourWidth: CGFloat = 1.9
     private static let contourBlurRadius: CGFloat = 2.0
     private static let contourAlpha: CGFloat = 0.9
 
     private static let outputScale: CGFloat = 0.5
     private static let maskScale: CGFloat = 0.45
-    private static let maxSegmentationRate: CFTimeInterval = 1.0 / 15.0
+    private static let maxSegmentationRate: CFTimeInterval = 1.0 / 30.0
     private static let maxRenderRate: CFTimeInterval = 1.0 / 60.0
 
     private let imageLayer = CALayer()
@@ -80,9 +83,10 @@ final class HandGhostView: UIView {
         imageLayer.minificationFilter = .linear
         layer.addSublayer(imageLayer)
 
-        // Calidad alta: el contorno tiene que seguir de verdad el borde de la mano.
-        // A 12 Hz alcanza y el costo queda acotado.
-        segmentation.qualityLevel = .accurate
+        // `.balanced` a 30 Hz: la mitad de retraso que `.accurate` (67 ms → 33 ms) y el
+        // borde sigue siendo bueno. El retraso de la máscara era lo que se sentía como
+        // "fantasma atrasado".
+        segmentation.qualityLevel = .balanced
         segmentation.outputPixelFormat = kCVPixelFormatType_OneComponent8
     }
 
@@ -252,10 +256,12 @@ final class HandGhostView: UIView {
 
         let solidMask = finalMask.cropped(to: rect)
 
-        // --- Mano: material claro translúcido sobre la imagen (no los píxeles crudos) ---
-        // El color claro se mezcla con la imagen original al `fillStrength`: queda un
-        // gris muy claro que deja intuir la forma real, como en la referencia.
-        let light = CIImage(color: CIColor(red: 0.90, green: 0.92, blue: 0.96,
+        // --- Mano: gris oscuro translúcido sobre la imagen ---
+        // El color se mezcla con la imagen original al `fillStrength`: sobre un panel
+        // negro queda una silueta oscura; sobre el mundo real, un tinte oscuro.
+        let light = CIImage(color: CIColor(red: Self.fillRed,
+                                           green: Self.fillGreen,
+                                           blue: Self.fillBlue,
                                            alpha: Self.fillStrength))
             .cropped(to: rect)
         let handFill = light.applyingFilter("CISourceOverCompositing", parameters: [
