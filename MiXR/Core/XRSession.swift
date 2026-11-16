@@ -73,6 +73,8 @@ final class XRSession: NSObject, ObservableObject {
     let overlay = HandOverlayView()
     /// Viñeta sobre el passthrough: da profundidad al mundo real.
     private let vignette = VignetteView()
+    /// Devuelve por encima de los paneles lo que está mas cerca que ellos (silla, mano, mesa).
+    private let occluderView = EnvironmentOccluderView()
 
     private let leftPane = StereoPane()
     private let rightPane = StereoPane()
@@ -158,10 +160,11 @@ final class XRSession: NSObject, ObservableObject {
         camera.layer.zPosition = 2
         vignette.layer.zPosition = 50
         hostView.layer.zPosition = 100
+        occluderView.layer.zPosition = 800
         ghostView.layer.zPosition = 900
         overlay.layer.zPosition = 1000
 
-        for subview in [backdrop, dim, camera, vignette, hostView, ghostView, overlay] as [UIView] {
+        for subview in [backdrop, dim, camera, vignette, hostView, occluderView, ghostView, overlay] as [UIView] {
             subview.frame = view.bounds
             subview.autoresizingMask = []
             view.addSubview(subview)
@@ -391,6 +394,7 @@ final class XRSession: NSObject, ObservableObject {
         lastDebugAt = startedAt
         localAddress = LocalIP.wifiAddress() ?? localAddress
         headTracker.start()
+        Haptics.prepare()
         startARKit()
 
         let link = CADisplayLink(target: self, selector: #selector(tick))
@@ -408,6 +412,7 @@ final class XRSession: NSObject, ObservableObject {
         arStarted = false
         gestures.reset()
         ghostView.clear()
+        occluderView.clear()
     }
 
     private func startARKit(forceReset: Bool = false) {
@@ -517,15 +522,20 @@ final class XRSession: NSObject, ObservableObject {
 
     private func handle(_ event: GestureEvent) {
         switch event {
+        case .grabBegan:
+            Haptics.grab()
+
         case .grabEnded:
+            Haptics.release()
             for window in hostView.windows { reanchor(window) }
 
         case .click(let point):
+            Haptics.tap()
             if let window = hostView.window(at: point) {
                 hostView.bringToFront(window)
             }
 
-        case .scroll, .directTouch, .grabBegan:
+        case .scroll, .directTouch:
             break
         }
     }
@@ -702,6 +712,7 @@ final class XRSession: NSObject, ObservableObject {
         camera.frame = rect
         ghostView.frame = rect
         vignette.frame = rect
+        occluderView.frame = rect
         hostView.bounds = CGRect(origin: .zero, size: rect.size)
         hostView.center = CGPoint(x: rect.midX, y: rect.midY)
         overlay.bounds = hostView.bounds
@@ -738,6 +749,21 @@ final class XRSession: NSObject, ObservableObject {
             }
         }
 
+        // --- Oclusión por el entorno: lo que esté más cerca que el panel tapa el panel ---
+        let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth
+        let nearestPanelDepth: Float? = {
+            var nearest: Float?
+            for window in hostView.windows where !window.view.isHidden {
+                guard let projection = pose.project(window.position) else { continue }
+                nearest = min(nearest ?? .greatestFiniteMagnitude, projection.depth)
+            }
+            return nearest
+        }()
+        occluderView.update(buffer: frame.capturedImage,
+                            depthMap: depthData?.depthMap,
+                            threshold: nearestPanelDepth,
+                            orientation: orientation)
+
         updateDebug(pose: pose, trackingState: frame.camera.trackingState)
         updateGuidedCapture(now: CACurrentMediaTime())
 
@@ -762,8 +788,6 @@ final class XRSession: NSObject, ObservableObject {
             updateStereoPanes(pose: pose, buffer: frame.capturedImage, cameraSize: rect.size)
         }
         updateGamepad(pose: pose)
-
-        let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth
 
         tracker.submit(pixelBuffer: inferenceBuffer,
                        depthMap: depthData?.depthMap,
@@ -978,7 +1002,7 @@ final class XRSession: NSObject, ObservableObject {
 
     private func applyStereoMode() {
         stereoRoot.isHidden = !stereoEnabled
-        for view in [backdrop, dim, camera, vignette, hostView, ghostView, overlay] as [UIView] {
+        for view in [backdrop, dim, camera, vignette, hostView, occluderView, ghostView, overlay] as [UIView] {
             view.isHidden = stereoEnabled
         }
 
