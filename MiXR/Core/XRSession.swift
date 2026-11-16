@@ -577,6 +577,16 @@ final class XRSession: NSObject, ObservableObject {
     /// Reposiciona las ventanas delante de la cámara **sin** tocar el giroscopio.
     /// Lo usa el rescate automático cuando una ventana queda fuera de cuadro.
     private func bringWindowsInFront() {
+        // Girar cada panel para que mire a la cámara: si quedó de canto (o de espaldas)
+        // por haberte movido, sin esto se seguía ocultando aunque estuviera delante.
+        if let pose = lastPose {
+            let cols = pose.transform.columns
+            let facing = simd_normalize(simd_float3(cols.2.x, cols.2.y, cols.2.z))
+            for window in hostView.windows {
+                window.normal = facing
+            }
+        }
+
         for window in hostView.windows {
             let distance = (window === monitor) ? Float(1.6) : Config.windowDistance
             hostView.setPosition(window, positionInFront(distance: distance), force: true)

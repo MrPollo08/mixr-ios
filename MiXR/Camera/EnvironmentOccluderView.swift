@@ -1,4 +1,4 @@
-import CoreImage
+﻿import CoreImage
 import CoreVideo
 import Metal
 import QuartzCore
@@ -16,7 +16,7 @@ final class EnvironmentOccluderView: UIView {
 
     /// Ancho de la transición de profundidad, en metros (borde suave, no dientes de sierra).
     private static let softness: CGFloat = 0.06
-    private static let outputScale: CGFloat = 0.5
+    private static let outputScale: CGFloat = 0.85
     private static let maxRenderRate: CFTimeInterval = 1.0 / 30.0
 
     private let imageLayer = CALayer()

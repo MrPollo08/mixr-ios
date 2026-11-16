@@ -35,7 +35,9 @@ final class HandGhostView: UIView {
     private static let contourBlurRadius: CGFloat = 2.0
     private static let contourAlpha: CGFloat = 0.9
 
-    private static let outputScale: CGFloat = 0.5
+    /// El compuesto sale a resolución completa: a media resolución el recorte de la mano
+    /// se veía pixelado al estirarlo.
+    private static let outputScale: CGFloat = 1.0
     private static let maskScale: CGFloat = 0.45
     private static let maxSegmentationRate: CFTimeInterval = 1.0 / 30.0
     private static let maxRenderRate: CFTimeInterval = 1.0 / 60.0
