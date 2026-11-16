@@ -22,6 +22,8 @@ final class SpatialWindowView: UIView {
     private let chromeless: Bool
 
     private let card = UIView()
+    /// Dorso del panel: lo que se ve al rodearlo, como la parte de atrás de un monitor.
+    private let backPlate = UIView()
     private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
     private let header = UIView()
     private let titleLabel = UILabel()
@@ -79,6 +81,20 @@ final class SpatialWindowView: UIView {
             addSubview(contentContainer)
             return
         }
+
+        backPlate.frame = bounds
+        backPlate.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        backPlate.backgroundColor = UIColor(white: 0.09, alpha: 1)
+        backPlate.layer.cornerRadius = 22
+        backPlate.layer.cornerCurve = .continuous
+        backPlate.layer.borderWidth = 1
+        backPlate.layer.borderColor = UIColor.white.withAlphaComponent(0.10).cgColor
+        backPlate.layer.shadowColor = UIColor.black.cgColor
+        backPlate.layer.shadowOpacity = 0.45
+        backPlate.layer.shadowRadius = 18
+        backPlate.layer.shadowOffset = CGSize(width: 0, height: 10)
+        backPlate.isHidden = true
+        addSubview(backPlate)
 
         card.frame = bounds
         card.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -146,6 +162,20 @@ final class SpatialWindowView: UIView {
         button.layer.cornerRadius = 15
     }
 
+    // MARK: - Dorso (para rodear el panel)
+
+    /// Muestra la parte de atrás cuando la cámara pasa por detrás del panel.
+    func setShowingBack(_ showing: Bool) {
+        guard showingBack != showing else { return }
+        showingBack = showing
+
+        backPlate.isHidden = !showing
+        card.isHidden = showing
+        grabBar.isHidden = showing
+    }
+
+    private var showingBack = false
+
     // MARK: - Contenido
 
     /// Resalta la ventana cuando la mano la agarra.
@@ -194,6 +224,8 @@ final class SpatialWindowView: UIView {
         super.layoutSubviews()
 
         card.frame = bounds
+        backPlate.frame = bounds
+        backPlate.layer.cornerRadius = 22
         header.frame = CGRect(x: 0, y: 0, width: bounds.width, height: Self.headerHeight)
         contentContainer.frame = CGRect(x: 0, y: Self.headerHeight,
                                         width: bounds.width,

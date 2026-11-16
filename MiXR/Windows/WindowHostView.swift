@@ -243,11 +243,14 @@ final class WindowHostView: UIView {
             return
         }
 
-        // De espaldas: el panel no se dibuja (es un objeto, no un HUD).
-        if isFacingAway(window: window, pose: pose) {
+        // De canto: no hay nada que dibujar.
+        if isEdgeOn(window: window, pose: pose) {
             window.view.isHidden = true
             return
         }
+
+        // Al rodearla se ve el dorso, como la parte de atrás de un monitor.
+        window.view.setShowingBack(facingSign(window: window, pose: pose) < 0)
 
         let base = window.view.baseSize
         guard base.width > 1, base.height > 1 else { return }
@@ -378,14 +381,23 @@ final class WindowHostView: UIView {
         return b
     }
 
-    /// Verdadero si el panel está de espaldas a la cámara (hay que ocultarlo).
-    /// El umbral sube a 0.22 porque cerca del canto la proyección se degrada.
-    private func isFacingAway(window: SpatialWindow, pose: CameraPose) -> Bool {
+    /// Verdadero si el panel está demasiado de canto como para dibujarlo.
+    /// Ya NO se oculta al pasar por detrás: se muestra el dorso, como un monitor real.
+    private func isEdgeOn(window: SpatialWindow, pose: CameraPose) -> Bool {
         let cameraPosition = simd_float3(pose.transform.columns.3.x,
                                          pose.transform.columns.3.y,
                                          pose.transform.columns.3.z)
         let toCamera = simd_normalize(cameraPosition - window.position)
-        return simd_dot(window.normal, toCamera) < 0.22
+        return abs(simd_dot(window.normal, toCamera)) < 0.06
+    }
+
+    /// > 0 si la cámara está del lado de la pantalla; < 0 si está por detrás.
+    private func facingSign(window: SpatialWindow, pose: CameraPose) -> Float {
+        let cameraPosition = simd_float3(pose.transform.columns.3.x,
+                                         pose.transform.columns.3.y,
+                                         pose.transform.columns.3.z)
+        let toCamera = simd_normalize(cameraPosition - window.position)
+        return simd_dot(window.normal, toCamera)
     }
     // MARK: - Interacción con el dedo (respaldo del tracking de manos)
 
