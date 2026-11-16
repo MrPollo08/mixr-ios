@@ -209,93 +209,81 @@ final class HandOverlayView: UIView {
         var contour: [CGPoint] = []
 
         // ---- 1. Borde cubital de la palma: muñeca → meñique ----
-        let wristRadius = scale * 0.30
+        let wristRadius = scale * 0.385
         let ulnarStart = offset(wrist, ulnar, wristRadius)
         contour.append(ulnarStart)
 
         if let little = joints[.littleMCP] {
             let midPalm = CGPoint(x: (wrist.x + little.x) * 0.5, y: (wrist.y + little.y) * 0.5)
-            contour.append(offset(midPalm, ulnar, scale * 0.27))
-            contour.append(offset(little, ulnar, scale * 0.15))
+            contour.append(offset(midPalm, ulnar, scale * 0.41))
         }
 
-        // ---- 2. Dedos, de meñique a pulgar ----
-        let chains: [[VNHumanHandPoseObservation.JointName]] = [
-            [.littleMCP, .littlePIP, .littleDIP, .littleTip],
-            [.ringMCP, .ringPIP, .ringDIP, .ringTip],
-            [.middleMCP, .middlePIP, .middleDIP, .middleTip],
-            [.indexMCP, .indexPIP, .indexDIP, .indexTip]
+        // ---- 2. Dedos, de meñique a pulgar (pulgar desde el MP: la base es la tenar) ----
+        let chains: [(finger: Int, names: [VNHumanHandPoseObservation.JointName])] = [
+            (4, [.littleMCP, .littlePIP, .littleDIP, .littleTip]),
+            (3, [.ringMCP, .ringPIP, .ringDIP, .ringTip]),
+            (2, [.middleMCP, .middlePIP, .middleDIP, .middleTip]),
+            (1, [.indexMCP, .indexPIP, .indexDIP, .indexTip]),
+            (0, [.thumbMP, .thumbIP, .thumbTip])
         ]
 
         // Recorrido: sube por el lado cubital del dedo, rodea la yema y baja por el radial.
-        for (order, chain) in chains.enumerated() {
-            let pts = chain.compactMap { joints[$0] }
+        // Entre dedo y dedo se inserta una única muesca en V que sale del punto anterior
+        // y entra en el borde del siguiente: así el contorno nunca se cruza.
+        var previousPoint = contour[contour.count - 1]
+        for chain in chains {
+            let pts = chain.names.compactMap { joints[$0] }
             guard pts.count >= 2 else { continue }
-            let radii = fingerRadii(fingerIndex: 4 - order, scale: scale, count: pts.count)
+            let radii = fingerRadii(fingerIndex: chain.finger, scale: scale, count: pts.count)
+            let entryPoint = offset(pts[0], ulnar, radii[0])
+
+            let gap = hypot(previousPoint.x - entryPoint.x, previousPoint.y - entryPoint.y)
+            if gap > scale * 0.04 {
+                let web = CGPoint(x: (previousPoint.x + entryPoint.x) * 0.5,
+                                  y: (previousPoint.y + entryPoint.y) * 0.5)
+                let towardWrist = CGPoint(x: wrist.x - web.x, y: wrist.y - web.y)
+                let wl = max(hypot(towardWrist.x, towardWrist.y), 0.001)
+                let depth = min(scale * 0.20, gap * 0.55)
+                contour.append(CGPoint(x: web.x + towardWrist.x / wl * depth,
+                                       y: web.y + towardWrist.y / wl * depth))
+            }
 
             appendFinger(contour: &contour, points: pts, radii: radii,
                          entrySide: ulnar, exitSide: radial,
                          radial: radial, side: 1.0)
-
-            // Muesca en V hacia el dedo siguiente.
-            if order < chains.count - 1,
-               let a = pts.first,
-               let nextChain = chains.indices.contains(order + 1) ? chains[order + 1].last : nil,
-               let b = joints[nextChain] {
-                let web = CGPoint(x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5)
-                let towardWrist = CGPoint(x: wrist.x - web.x, y: wrist.y - web.y)
-                let wl = max(hypot(towardWrist.x, towardWrist.y), 0.001)
-                let depth = scale * 0.16
-                contour.append(CGPoint(x: web.x + towardWrist.x / wl * depth,
-                                       y: web.y + towardWrist.y / wl * depth))
-            }
+            previousPoint = contour[contour.count - 1]
         }
 
-        // ---- 3. Pulgar: sube por el lado cubital, punta, baja por el radial ----
-        let thumbChain: [VNHumanHandPoseObservation.JointName] = [.thumbCMC, .thumbMP, .thumbIP, .thumbTip]
-        let thumbPts = thumbChain.compactMap { joints[$0] }
-        if thumbPts.count >= 2 {
-            // Muesca entre índice y pulgar (más profunda, primer interóseo dorsal).
-            if let indexMCP = joints[.indexMCP] {
-                let web = CGPoint(x: (thumbPts[0].x + indexMCP.x) * 0.5,
-                                  y: (thumbPts[0].y + indexMCP.y) * 0.5)
-                let towardWrist = CGPoint(x: wrist.x - web.x, y: wrist.y - web.y)
-                let wl = max(hypot(towardWrist.x, towardWrist.y), 0.001)
-                contour.append(CGPoint(x: web.x + towardWrist.x / wl * scale * 0.20,
-                                       y: web.y + towardWrist.y / wl * scale * 0.20))
-            }
-            let radii = fingerRadii(fingerIndex: 0, scale: scale, count: thumbPts.count)
-            appendFinger(contour: &contour, points: thumbPts, radii: radii,
-                         entrySide: ulnar, exitSide: radial,
-                         radial: radial, side: 1.0)
+        // ---- 3. Eminencia tenar y borde radial de la palma: pulgar → muñeca ----
+        if let cmc = joints[.thumbCMC] {
+            contour.append(offset(cmc, radial, scale * 0.255))
+            let midThenar = CGPoint(x: (cmc.x + wrist.x) * 0.5, y: (cmc.y + wrist.y) * 0.5)
+            contour.append(offset(midThenar, radial, scale * 0.395))
         }
-
-        // ---- 4. Borde radial (tenar) de la palma: pulgar → muñeca ----
         let radialStart = offset(wrist, radial, wristRadius)
-        contour.append(offset(CGPoint(x: (wrist.x + (joints[.indexMCP]?.x ?? wrist.x)) * 0.5,
-                                      y: (wrist.y + (joints[.indexMCP]?.y ?? wrist.y)) * 0.5),
-                              radial, scale * 0.26))
         contour.append(radialStart)
 
-        // ---- 5. Antebrazo: baja por el radial, rodea el extremo y sube por el cubital ----
+        // ---- 4. Antebrazo: baja por el radial, rodea el extremo y sube por el cubital ----
         let elbow = CGPoint(x: wrist.x + armDir.x * armLen, y: wrist.y + armDir.y * armLen)
-        let armRadius = scale * 0.28
-        let perp = CGPoint(x: -armDir.y, y: armDir.x)
+        let armRadius = scale * 0.40
 
-        // Lado radial del antebrazo
-        appendLine(&contour, from: radialStart,
-                   to: CGPoint(x: elbow.x - perp.x * armRadius, y: elbow.y - perp.y * armRadius),
-                   steps: 3)
+        let radialCapPoint = offset(elbow, radial, armRadius)
+        let ulnarCapPoint = offset(elbow, ulnar, armRadius)
 
-        // Extremo del brazo (semicírculo) — queda oculto por el fade de la máscara.
-        let capAngleStart = atan2(-perp.y, -perp.x)
-        let capAngleEnd = atan2(perp.y, perp.x)
-        appendArc(&contour, center: elbow, radius: armRadius,
-                  from: capAngleStart, to: capAngleEnd, clockwise: true, steps: 8)
+        appendLine(&contour, from: radialStart, to: radialCapPoint, steps: 3)
 
-        // Lado cubital del antebrazo de vuelta a la muñeca
-        appendLine(&contour, from: CGPoint(x: elbow.x + perp.x * armRadius, y: elbow.y + perp.y * armRadius),
-                   to: ulnarStart, steps: 3)
+        // Extremo del brazo: arco que abomba en la dirección del antebrazo
+        // (queda prácticamente invisible por el fade de la máscara).
+        appendArc(&contour,
+                  center: elbow,
+                  radius: armRadius,
+                  from: angleOfVector(radial),
+                  to: angleOfVector(ulnar),
+                  clockwise: false,
+                  steps: 10,
+                  referenceDirection: angleOfVector(armDir))
+
+        appendLine(&contour, from: ulnarCapPoint, to: ulnarStart, steps: 3)
 
         guard contour.count >= 8 else { group.clear(); return }
 
@@ -343,6 +331,12 @@ final class HandOverlayView: UIView {
             .sorted { $0.segmentIndex < $1.segmentIndex }
         var radii = defs.map { scale * $0.radiusStartRatio }
         if let last = defs.last { radii.append(scale * last.radiusEndRatio) }
+
+        // El pulgar se dibuja desde el MP: la base (CMC) forma parte de la eminencia tenar.
+        if fingerIndex == 0, count == 3, radii.count >= 4 {
+            radii = Array(radii.dropFirst())
+        }
+
         while radii.count < count { radii.append(radii.last ?? scale * 0.1) }
         if radii.count > count { radii = Array(radii.prefix(count - 1)) + [radii[count - 1]] }
         return radii
@@ -374,7 +368,7 @@ final class HandOverlayView: UIView {
         let entryAngle = angleOfVector(entrySide)
         let exitAngle = angleOfVector(exitSide)
 
-        let rTip = radii[radii.count - 1] * 0.95
+        let rTip = max(radii[radii.count - 1], 1.0)
         appendArc(&contour, center: tip, radius: rTip,
                   from: entryAngle, to: exitAngle,
                   clockwise: false, steps: 7,

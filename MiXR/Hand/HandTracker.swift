@@ -162,30 +162,30 @@ final class HandTracker {
     ]
 
     static let boneDefinitions: [HandBoneDefinition] = [
-        HandBoneDefinition(parent: .wrist, child: .thumbCMC, fingerIndex: 0, segmentIndex: 0, radiusStartRatio: 0.235, radiusEndRatio: 0.210),
-        HandBoneDefinition(parent: .thumbCMC, child: .thumbMP, fingerIndex: 0, segmentIndex: 1, radiusStartRatio: 0.210, radiusEndRatio: 0.176),
-        HandBoneDefinition(parent: .thumbMP, child: .thumbIP, fingerIndex: 0, segmentIndex: 2, radiusStartRatio: 0.176, radiusEndRatio: 0.152),
-        HandBoneDefinition(parent: .thumbIP, child: .thumbTip, fingerIndex: 0, segmentIndex: 3, radiusStartRatio: 0.152, radiusEndRatio: 0.128),
+        HandBoneDefinition(parent: .wrist, child: .thumbCMC, fingerIndex: 0, segmentIndex: 0, radiusStartRatio: 0.255, radiusEndRatio: 0.230),
+        HandBoneDefinition(parent: .thumbCMC, child: .thumbMP, fingerIndex: 0, segmentIndex: 1, radiusStartRatio: 0.230, radiusEndRatio: 0.196),
+        HandBoneDefinition(parent: .thumbMP, child: .thumbIP, fingerIndex: 0, segmentIndex: 2, radiusStartRatio: 0.196, radiusEndRatio: 0.170),
+        HandBoneDefinition(parent: .thumbIP, child: .thumbTip, fingerIndex: 0, segmentIndex: 3, radiusStartRatio: 0.170, radiusEndRatio: 0.146),
 
-        HandBoneDefinition(parent: .wrist, child: .indexMCP, fingerIndex: 1, segmentIndex: 0, radiusStartRatio: 0.195, radiusEndRatio: 0.168),
-        HandBoneDefinition(parent: .indexMCP, child: .indexPIP, fingerIndex: 1, segmentIndex: 1, radiusStartRatio: 0.168, radiusEndRatio: 0.144),
-        HandBoneDefinition(parent: .indexPIP, child: .indexDIP, fingerIndex: 1, segmentIndex: 2, radiusStartRatio: 0.144, radiusEndRatio: 0.124),
-        HandBoneDefinition(parent: .indexDIP, child: .indexTip, fingerIndex: 1, segmentIndex: 3, radiusStartRatio: 0.124, radiusEndRatio: 0.108),
+        HandBoneDefinition(parent: .wrist, child: .indexMCP, fingerIndex: 1, segmentIndex: 0, radiusStartRatio: 0.235, radiusEndRatio: 0.212),
+        HandBoneDefinition(parent: .indexMCP, child: .indexPIP, fingerIndex: 1, segmentIndex: 1, radiusStartRatio: 0.212, radiusEndRatio: 0.188),
+        HandBoneDefinition(parent: .indexPIP, child: .indexDIP, fingerIndex: 1, segmentIndex: 2, radiusStartRatio: 0.188, radiusEndRatio: 0.166),
+        HandBoneDefinition(parent: .indexDIP, child: .indexTip, fingerIndex: 1, segmentIndex: 3, radiusStartRatio: 0.166, radiusEndRatio: 0.146),
 
-        HandBoneDefinition(parent: .wrist, child: .middleMCP, fingerIndex: 2, segmentIndex: 0, radiusStartRatio: 0.200, radiusEndRatio: 0.174),
-        HandBoneDefinition(parent: .middleMCP, child: .middlePIP, fingerIndex: 2, segmentIndex: 1, radiusStartRatio: 0.174, radiusEndRatio: 0.150),
-        HandBoneDefinition(parent: .middlePIP, child: .middleDIP, fingerIndex: 2, segmentIndex: 2, radiusStartRatio: 0.150, radiusEndRatio: 0.128),
-        HandBoneDefinition(parent: .middleDIP, child: .middleTip, fingerIndex: 2, segmentIndex: 3, radiusStartRatio: 0.128, radiusEndRatio: 0.112),
+        HandBoneDefinition(parent: .wrist, child: .middleMCP, fingerIndex: 2, segmentIndex: 0, radiusStartRatio: 0.244, radiusEndRatio: 0.220),
+        HandBoneDefinition(parent: .middleMCP, child: .middlePIP, fingerIndex: 2, segmentIndex: 1, radiusStartRatio: 0.220, radiusEndRatio: 0.196),
+        HandBoneDefinition(parent: .middlePIP, child: .middleDIP, fingerIndex: 2, segmentIndex: 2, radiusStartRatio: 0.196, radiusEndRatio: 0.174),
+        HandBoneDefinition(parent: .middleDIP, child: .middleTip, fingerIndex: 2, segmentIndex: 3, radiusStartRatio: 0.174, radiusEndRatio: 0.152),
 
-        HandBoneDefinition(parent: .wrist, child: .ringMCP, fingerIndex: 3, segmentIndex: 0, radiusStartRatio: 0.190, radiusEndRatio: 0.162),
-        HandBoneDefinition(parent: .ringMCP, child: .ringPIP, fingerIndex: 3, segmentIndex: 1, radiusStartRatio: 0.162, radiusEndRatio: 0.138),
-        HandBoneDefinition(parent: .ringPIP, child: .ringDIP, fingerIndex: 3, segmentIndex: 2, radiusStartRatio: 0.138, radiusEndRatio: 0.118),
-        HandBoneDefinition(parent: .ringDIP, child: .ringTip, fingerIndex: 3, segmentIndex: 3, radiusStartRatio: 0.118, radiusEndRatio: 0.102),
+        HandBoneDefinition(parent: .wrist, child: .ringMCP, fingerIndex: 3, segmentIndex: 0, radiusStartRatio: 0.230, radiusEndRatio: 0.204),
+        HandBoneDefinition(parent: .ringMCP, child: .ringPIP, fingerIndex: 3, segmentIndex: 1, radiusStartRatio: 0.204, radiusEndRatio: 0.180),
+        HandBoneDefinition(parent: .ringPIP, child: .ringDIP, fingerIndex: 3, segmentIndex: 2, radiusStartRatio: 0.180, radiusEndRatio: 0.158),
+        HandBoneDefinition(parent: .ringDIP, child: .ringTip, fingerIndex: 3, segmentIndex: 3, radiusStartRatio: 0.158, radiusEndRatio: 0.140),
 
-        HandBoneDefinition(parent: .wrist, child: .littleMCP, fingerIndex: 4, segmentIndex: 0, radiusStartRatio: 0.175, radiusEndRatio: 0.146),
-        HandBoneDefinition(parent: .littleMCP, child: .littlePIP, fingerIndex: 4, segmentIndex: 1, radiusStartRatio: 0.146, radiusEndRatio: 0.122),
-        HandBoneDefinition(parent: .littlePIP, child: .littleDIP, fingerIndex: 4, segmentIndex: 2, radiusStartRatio: 0.122, radiusEndRatio: 0.104),
-        HandBoneDefinition(parent: .littleDIP, child: .littleTip, fingerIndex: 4, segmentIndex: 3, radiusStartRatio: 0.104, radiusEndRatio: 0.090)
+        HandBoneDefinition(parent: .wrist, child: .littleMCP, fingerIndex: 4, segmentIndex: 0, radiusStartRatio: 0.212, radiusEndRatio: 0.184),
+        HandBoneDefinition(parent: .littleMCP, child: .littlePIP, fingerIndex: 4, segmentIndex: 1, radiusStartRatio: 0.184, radiusEndRatio: 0.160),
+        HandBoneDefinition(parent: .littlePIP, child: .littleDIP, fingerIndex: 4, segmentIndex: 2, radiusStartRatio: 0.160, radiusEndRatio: 0.140),
+        HandBoneDefinition(parent: .littleDIP, child: .littleTip, fingerIndex: 4, segmentIndex: 3, radiusStartRatio: 0.140, radiusEndRatio: 0.124)
     ]
 
     private let queue = DispatchQueue(label: "mixr.hand-tracker", qos: .userInteractive)
