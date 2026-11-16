@@ -33,6 +33,7 @@ final class XRSession: NSObject, ObservableObject {
     /// 2 = imagen completa de la cámara: nada recortado, ideal para el tracking de manos.
     @Published var framing = 2
     /// Autofoco continuo (true) o enfoque bloqueado (false).
+    /// Autofoco normal de la camara. Bloquearlo dejaba la lente clavada al fondo.
     @Published var autofocusEnabled = true
     /// Mano fantasma (segmentación) en vez de la malla sintética.
     @Published var ghostHandEnabled = false
@@ -145,6 +146,8 @@ final class XRSession: NSObject, ObservableObject {
     // Enfoque: trabajo pendiente del bloqueo automático.
     private var focusLockWork: DispatchWorkItem?
     private var autoFocusLockScheduled = false
+    /// Cuándo se dejó de ver una ventana (para traerla de vuelta).
+    private var offscreenSince: CFTimeInterval?
 
     lazy var containerView: UIView = {
         let view = UIView(frame: .zero)
@@ -767,6 +770,7 @@ final class XRSession: NSObject, ObservableObject {
 
         updateDebug(pose: pose, trackingState: frame.camera.trackingState)
         updateGuidedCapture(now: CACurrentMediaTime())
+        updateWindowVisibility(pose: pose)
 
         let displayHands = predictedHands()
         overlay.render(poses: displayHands)
@@ -824,11 +828,8 @@ final class XRSession: NSObject, ObservableObject {
             recorder.capture(hand: hand, now: CACurrentMediaTime())
         }
 
-        // Primera vez que aparece la mano: dejar que el autofoco la encuentre y congelarlo.
-        if !poses.isEmpty, !autoFocusLockScheduled {
-            autoFocusLockScheduled = true
-            lockFocus(after: 0.75)
-        }
+        // Sin bloqueo de foco: se deja el autofoco del sistema, que enfoca lo que tiene delante.
+        _ = autoFocusLockScheduled
 
         if let first = poses.first {
             let tag = first.hasLiDAR ? "LiDAR" : "3D"
@@ -927,6 +928,36 @@ final class XRSession: NSObject, ObservableObject {
             if captureStatus != recorder.statusText { captureStatus = recorder.statusText }
             let counts = recorder.countsText
             if captureCountsText != counts { captureCountsText = counts }
+        }
+    }
+
+    private func updateWindowVisibility(pose: CameraPose) {
+        guard didAutoOpenMonitor, !hostView.windows.isEmpty else { return }
+
+        var anyVisible = false
+        for window in hostView.windows where !window.view.isHidden {
+            if let frame = hostView.screenFrame(for: window),
+               frame.intersects(hostView.bounds.insetBy(dx: -20, dy: -20)) {
+                anyVisible = true
+                break
+            }
+        }
+
+        if anyVisible {
+            offscreenSince = nil
+            return
+        }
+
+        let now = CACurrentMediaTime()
+        if let since = offscreenSince {
+            // Si la ventana quedó fuera de cuadro más de 2 s, se trae al frente:
+            // si no, es imposible encontrarla girando la cabeza.
+            if now - since > 2.0 {
+                offscreenSince = nil
+                centerWindows()
+            }
+        } else {
+            offscreenSince = now
         }
     }
 
