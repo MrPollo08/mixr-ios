@@ -61,7 +61,18 @@ enum GestureFeatureExtractor {
         (.thumbTip, .littleMCP)
     ]
 
-    static let featureCount = jointOrder.count * 2 + distancePairs.count
+    /// Pares yema→nudillo para medir cuánto se curva cada dedo.
+    /// Es lo que separa un puño de una palma abierta cuando los dedos apuntan a la cámara.
+    private static let curlPairs: [(VNHumanHandPoseObservation.JointName,
+                                    VNHumanHandPoseObservation.JointName)] = [
+        (.thumbTip, .thumbCMC),
+        (.indexTip, .indexMCP),
+        (.middleTip, .middleMCP),
+        (.ringTip, .ringMCP),
+        (.littleTip, .littleMCP)
+    ]
+
+    static let featureCount = jointOrder.count * 2 + curlPairs.count + distancePairs.count
 
     static func features(for hand: HandPose) -> [Float]? {
         guard let wrist = hand.joints[.wrist],
@@ -85,6 +96,19 @@ enum GestureFeatureExtractor {
             let vy = (p.y - wrist.y) / palm
             out.append(Float(vx * perpX + vy * perpY))
             out.append(Float(vx * dirX + vy * dirY))
+        }
+
+        // Curvatura: distancia de la yema a la muñeca sobre la del nudillo.
+        // En este marco la muñeca es (0,0), así que alcanza con el módulo del punto.
+        for (tip, mcp) in curlPairs {
+            guard let pt = hand.joints[tip], let pm = hand.joints[mcp] else { return nil }
+            let tipX = (pt.x - wrist.x) / palm
+            let tipY = (pt.y - wrist.y) / palm
+            let mcpX = (pm.x - wrist.x) / palm
+            let mcpY = (pm.y - wrist.y) / palm
+            let tipLen = hypot(tipX, tipY)
+            let mcpLen = max(hypot(mcpX, mcpY), 1e-3)
+            out.append(Float(tipLen / mcpLen))
         }
 
         for (a, b) in distancePairs {

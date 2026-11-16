@@ -24,8 +24,8 @@ final class GestureEngine {
 
     var onEvent: ((GestureEvent) -> Void)?
 
-    private let pinchEnter: CGFloat = 0.62
-    private let pinchExit: CGFloat = 0.40
+    private let pinchEnter: CGFloat = 0.55
+    private let pinchExit: CGFloat = 0.35
     /// Un toque válido: corto y sin desplazamiento.
     private let clickMaxDuration: CFTimeInterval = 0.55
     private let clickMaxTravel: CGFloat = 22
@@ -34,6 +34,8 @@ final class GestureEngine {
     private let grace: CFTimeInterval = 0.45
 
     private let pinchTracker = PinchTracker()
+    /// Clasificador entrenado: decide *qué* gesto es. El `PinchTracker` decide *cuándo*.
+    private let classifier = GestureClassifier()
 
     private var dragWindow: SpatialWindow?
     private var pressCandidate: SpatialWindow?
@@ -72,6 +74,7 @@ final class GestureEngine {
         pressCandidate = nil
         scrollTarget = nil
         pinchTracker.reset()
+        classifier.reset()
         touchLatched.removeAll()
         dragFilter.reset()
     }
@@ -132,9 +135,20 @@ final class GestureEngine {
     // MARK: - Señal de agarre
 
     /// Pinza pulgar-índice **o** puño cerrado, en una sola señal continua.
+    /// Fuente principal: el clasificador entrenado. Respaldo: la geometría.
     private func grabValue(_ hand: HandPose) -> CGFloat {
+        if let features = GestureFeatureExtractor.features(for: hand) {
+            classifier.classify(features: features)
+            return CGFloat(classifier.grabProbability)
+        }
         let pinch = pinchValue(hand)
         return hand.closedFist ? max(pinch, 0.85) : pinch
+    }
+
+    /// Para el readout: gesto reconocido y confianza.
+    var recognizedGestureText: String {
+        let label = classifier.lastGesture
+        return String(format: "%@ %.2f", label.shortName, Double(classifier.lastConfidence))
     }
 
     /// Se recalcula en cada frame desde las articulaciones (ya suavizadas/predichas),
