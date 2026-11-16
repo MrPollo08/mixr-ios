@@ -792,10 +792,11 @@ final class XRSession: NSObject, ObservableObject {
         let pinch = lastHands.first?.pinch ?? 0
         let fist = (lastHands.first?.closedFist ?? false) ? 1 : 0
         let text = String(
-            format: "ARKit %@  %dfps  inf %d\nmanos %d  %@  P%.2f F%d\nmascara %@ %@  seg %d\nfantasma %@  win %d  drag %@",
+            format: "ARKit %@  %dfps  inf %d\nmanos %d  %@  P%.2f F%d\nmascara %@ %@ %.0f%%  seg %d\nfantasma %@  win %d  drag %@",
             tracking, Int(fps.rounded()), lastInferenceWidth,
             lastHands.count, depth, Float(pinch), fist,
-            ghostView.hasMask ? "si" : "no", ghostView.maskSizeText, ghostView.segmentationCount,
+            ghostView.hasMask ? "si" : "no", ghostView.maskSizeText,
+            Double(ghostView.maskCoverage) * 100.0, ghostView.segmentationCount,
             ghostView.hasContent ? "si" : "no", hostView.windows.count,
             gestures.isDragging ? "si" : "no"
         )

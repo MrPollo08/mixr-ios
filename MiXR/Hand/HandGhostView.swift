@@ -58,6 +58,9 @@ final class HandGhostView: UIView {
     /// Diagnóstico
     private(set) var segmentationCount = 0
     private(set) var maskSizeText = "-"
+    /// Fracción de la máscara que es "persona". Si es ~0, la segmentación no encontró
+    /// nada y sólo se está dibujando la silueta geométrica (dedos rígidos, anchos iguales).
+    private(set) var maskCoverage: Float = 0
     var hasMask: Bool { personMask != nil }
     var hasContent: Bool { imageLayer.contents != nil }
 
@@ -145,12 +148,15 @@ final class HandGhostView: UIView {
             do {
                 try handler.perform([self.segmentation])
                 if let result = self.segmentation.results?.first {
-                    self.personMask = result.pixelBuffer
+                    let buffer = result.pixelBuffer
+                    let coverage = Self.coverage(of: buffer)
+                    self.personMask = buffer
                     self.segmentationCount += 1
-                    let w = CVPixelBufferGetWidth(result.pixelBuffer)
-                    let h = CVPixelBufferGetHeight(result.pixelBuffer)
+                    let w = CVPixelBufferGetWidth(buffer)
+                    let h = CVPixelBufferGetHeight(buffer)
                     let text = "\(w)x\(h)"
                     DispatchQueue.main.async {
+                        self.maskCoverage = coverage
                         if self.maskSizeText != text { self.maskSizeText = text }
                     }
                 }
@@ -211,16 +217,18 @@ final class HandGhostView: UIView {
 
         // --- Máscara: segmentación de persona ∪ silueta geométrica ---
         var mask: CIImage?
-        var personMaskImage: CIImage?
+        // Si la segmentación no encuentra persona (cobertura ~0), su máscara no aporta
+        // nada: sólo se dibujaría la silueta geométrica, con dedos rígidos y anchos
+        // iguales. En ese caso se ignora y queda el respaldo geométrico puro.
+        let personIsUsable = personMask != nil && maskCoverage > 0.008
 
-        if let personMask {
+        if let personMask, personIsUsable {
             var person = CIImage(cvPixelBuffer: personMask).oriented(forExifOrientation: exif)
             person = person.transformed(by: CGAffineTransform(translationX: -person.extent.origin.x,
                                                               y: -person.extent.origin.y))
-            personMaskImage = aspectFill(person, into: rect)
+            mask = aspectFill(person, into: rect)
                 .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 1.5])
                 .cropped(to: rect)
-            mask = personMaskImage
         }
 
         if let geometric = geometricMask(hands: hands, size: size) {
@@ -331,8 +339,35 @@ final class HandGhostView: UIView {
         return filter?.outputImage?.cropped(to: CGRect(origin: .zero, size: size))
     }
 
-    private func aspectFill(_ image: CIImage, into rect: CGRect) -> CIImage {
-        let imageWidth = image.extent.width
+    /// Fracción de píxeles "persona" en la máscara, muestreada en una grilla 32×32.
+    private static func coverage(of buffer: CVPixelBuffer) -> Float {
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return 0 }
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+        guard width > 8, height > 8 else { return 0 }
+
+        let stepX = max(width / 32, 1)
+        let stepY = max(height / 32, 1)
+        var hits = 0
+        var total = 0
+
+        for y in stride(from: 0, to: height, by: stepY) {
+            let row = base.advanced(by: y * rowBytes)
+            for x in stride(from: 0, to: width, by: stepX) {
+                let value = row.advanced(by: x).assumingMemoryBound(to: UInt8.self).pointee
+                if value > 128 { hits += 1 }
+                total += 1
+            }
+        }
+
+        return total > 0 ? Float(hits) / Float(total) : 0
+    }
+
+    private func aspectFill(_ image: CIImage, into rect: CGRect) -> CIImage {        let imageWidth = image.extent.width
         let imageHeight = image.extent.height
         guard imageWidth > 1, imageHeight > 1 else { return image }
 
