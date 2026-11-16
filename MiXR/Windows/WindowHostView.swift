@@ -249,80 +249,141 @@ final class WindowHostView: UIView {
             return
         }
 
-        // Preferimos la proyección del renderer del fondo (SceneKit).
-        var center = projection.center
-        var pointsPerMeter = projection.pointsPerMeter
-        if let projector = worldToScreen {
-            let rendered = projector(window.position)
-            if rendered.pointsPerMeter.isFinite, rendered.pointsPerMeter > 0.1,
-               rendered.center.x.isFinite, rendered.center.y.isFinite {
-                center = rendered.center
-                pointsPerMeter = rendered.pointsPerMeter
+        let base = window.view.baseSize
+        guard base.width > 1, base.height > 1 else { return }
+
+        // --- Esquinas del panel en el mundo, según SU normal fija ---
+        let normal = simd_normalize(window.normal)
+        var right = simd_cross(simd_float3(0, 1, 0), normal)
+        if simd_length(right) < 0.01 { right = simd_float3(1, 0, 0) }
+        right = simd_normalize(right)
+        let up = simd_normalize(simd_cross(normal, right))
+
+        let halfWidth = Float(window.physicalWidth) * 0.5
+        let halfHeight = halfWidth * Float(base.height / base.width)
+        let p = window.position
+
+        let corners3D = [
+            p + right * (-halfWidth) + up * halfHeight,
+            p + right * halfWidth + up * halfHeight,
+            p + right * halfWidth + up * (-halfHeight),
+            p + right * (-halfWidth) + up * (-halfHeight)
+        ]
+
+        var quad: [CGPoint] = []
+        quad.reserveCapacity(4)
+        for corner in corners3D {
+            guard let projected = pose.project(corner) else {
+                window.view.isHidden = true
+                return
             }
+            quad.append(projected.center)
         }
 
-        window.pointsPerMeter = pointsPerMeter
-        window.view.isHidden = false
-        window.view.bounds = CGRect(origin: .zero, size: window.view.baseSize)
-        let previous = window.smoothedCenter ?? center
-        // Tracking limitado (poca luz/textura): más calma, menos temblor.
-        // Factor alto = el panel sigue al mundo casi sin retraso (antes 0.35 se notaba como lag).
-        let smoothing: CGFloat = pose.trackingLimited ? 0.45 : 0.72
-        let smoothed = CGPoint(x: previous.x + (center.x - previous.x) * smoothing,
-                               y: previous.y + (center.y - previous.y) * smoothing)
-        window.smoothedCenter = smoothed
-        window.view.center = smoothed
+        let center = CGPoint(x: (quad[0].x + quad[1].x + quad[2].x + quad[3].x) / 4,
+                             y: (quad[0].y + quad[1].y + quad[2].y + quad[3].y) / 4)
 
-        let targetWidth = window.physicalWidth * pointsPerMeter
-        let scale = targetWidth / window.view.baseSize.width
-        window.view.transform = .identity
-        window.view.layer.transform = panelTransform(window: window, pose: pose, scale: scale)
+        // Escala aparente: ancho proyectado del borde superior en metros.
+        let topWidth = hypot(quad[1].x - quad[0].x, quad[1].y - quad[0].y)
+        if topWidth > 1, window.physicalWidth > 0.05 {
+            window.pointsPerMeter = topWidth / window.physicalWidth
+        }
+
+        window.view.isHidden = false
+        window.view.bounds = CGRect(origin: .zero, size: base)
+
+        let previous = window.smoothedCenter ?? center
+        let smoothing: CGFloat = pose.trackingLimited ? 0.45 : 0.72
+        window.smoothedCenter = CGPoint(x: previous.x + (center.x - previous.x) * smoothing,
+                                        y: previous.y + (center.y - previous.y) * smoothing)
+        window.view.center = window.smoothedCenter ?? center
+
+        // --- Transformación proyectiva exacta desde las 4 esquinas ---
+        // Esto es lo que hace que el panel sea un objeto **inerte**: su plano está fijo
+        // en el mundo, así que al moverte cambia su perspectiva pero NO gira hacia vos.
+        let offsets = quad.map { CGPoint(x: $0.x - center.x, y: $0.y - center.y) }
+        let unit: [CGPoint] = [CGPoint(x: -1, y: -1), CGPoint(x: 1, y: -1),
+                               CGPoint(x: 1, y: 1), CGPoint(x: -1, y: 1)]
+
+        if let h = Self.homography(from: unit, to: offsets) {
+            let hw = base.width * 0.5
+            let hh = base.height * 0.5
+
+            var transform = CATransform3DIdentity
+            transform.m11 = h[0] / hw
+            transform.m21 = h[1] / hh
+            transform.m41 = h[2]
+            transform.m12 = h[3] / hw
+            transform.m22 = h[4] / hh
+            transform.m42 = h[5]
+            transform.m14 = h[6] / hw
+            transform.m24 = h[7] / hh
+            transform.m33 = 1
+            transform.m44 = 1
+            window.view.layer.transform = transform
+        } else {
+            let scale = (topWidth / max(window.physicalWidth, 0.01)) / base.width
+            window.view.layer.transform = CATransform3DMakeScale(scale, scale, 1)
+        }
 
         // Se atenúa un poco con la distancia (efecto de profundidad).
         let fade = CGFloat(1.35 - projection.depth * 0.09)
         window.view.alpha = min(1, max(0.35, fade))
     }
 
+    /// Resuelve la homografía que lleva 4 puntos de origen a 4 de destino.
+    /// Con eso el panel se dibuja como un plano 3D real, sin girar hacia la cámara.
+    private static func homography(from src: [CGPoint], to dst: [CGPoint]) -> [CGFloat]? {
+        guard src.count == 4, dst.count == 4 else { return nil }
 
-    /// Transformación 3D real del panel: se inclina según desde dónde lo mires.
-    /// Sin esto las ventanas eran "billboard" (siempre de frente).
-    private func panelTransform(window: SpatialWindow, pose: CameraPose, scale: CGFloat) -> CATransform3D {
-        let cameraPosition = simd_float3(pose.transform.columns.3.x,
-                                         pose.transform.columns.3.y,
-                                         pose.transform.columns.3.z)
-        let delta = cameraPosition - window.position
-        let normal = window.normal
+        var a = [[CGFloat]](repeating: [CGFloat](repeating: 0, count: 8), count: 8)
+        var b = [CGFloat](repeating: 0, count: 8)
 
-        var right = simd_cross(simd_float3(0, 1, 0), normal)
-        if simd_length(right) < 0.01 { right = simd_float3(1, 0, 0) }
-        right = simd_normalize(right)
-        let up = simd_normalize(simd_cross(normal, right))
+        for i in 0..<4 {
+            let s = src[i]
+            let d = dst[i]
+            a[2 * i] = [s.x, s.y, 1, 0, 0, 0, -s.x * d.x, -s.y * d.x]
+            b[2 * i] = d.x
+            a[2 * i + 1] = [0, 0, 0, s.x, s.y, 1, -s.x * d.y, -s.y * d.y]
+            b[2 * i + 1] = d.y
+        }
 
-        let localX = simd_dot(delta, right)
-        let localY = simd_dot(delta, up)
-        let localZ = max(simd_dot(delta, normal), 0.01)
+        // Eliminación gaussiana con pivoteo parcial.
+        for col in 0..<8 {
+            var pivot = col
+            for row in (col + 1)..<8 where abs(a[row][col]) > abs(a[pivot][col]) {
+                pivot = row
+            }
+            guard abs(a[pivot][col]) > 1e-9 else { return nil }
+            if pivot != col {
+                a.swapAt(col, pivot)
+                b.swapAt(col, pivot)
+            }
 
-        let yaw = atan2(CGFloat(localX), CGFloat(localZ))
-        let pitch = atan2(CGFloat(localY), CGFloat(hypot(localX, localZ)))
+            let diagonal = a[col][col]
+            for j in col..<8 { a[col][j] /= diagonal }
+            b[col] /= diagonal
 
-        var transform = CATransform3DIdentity
-        // Perspectiva físicamente correcta: la fuerza de la fuga es 1 / distancia focal
-        // (en puntos). Antes era una constante inventada, por eso el panel se veía plano.
-        let focal = CGFloat(max((pose.focalX + pose.focalY) * 0.5, 200))
-        transform.m34 = -1.0 / focal
-        transform = CATransform3DRotate(transform, -yaw, 0, 1, 0)
-        transform = CATransform3DRotate(transform, pitch, 1, 0, 0)
-        transform = CATransform3DScale(transform, scale, scale, 1)
-        return transform
+            for row in 0..<8 where row != col {
+                let factor = a[row][col]
+                guard abs(factor) > 1e-12 else { continue }
+                for j in col..<8 { a[row][j] -= factor * a[col][j] }
+                b[row] -= factor * b[col]
+            }
+        }
+
+        for value in b where !value.isFinite { return nil }
+        return b
     }
 
     /// Verdadero si el panel está de espaldas a la cámara (hay que ocultarlo).
+    /// El umbral sube a 0.22 porque cerca del canto la proyección se degrada.
     private func isFacingAway(window: SpatialWindow, pose: CameraPose) -> Bool {
         let cameraPosition = simd_float3(pose.transform.columns.3.x,
                                          pose.transform.columns.3.y,
                                          pose.transform.columns.3.z)
         let toCamera = simd_normalize(cameraPosition - window.position)
-        return simd_dot(window.normal, toCamera) < 0.12
+        return simd_dot(window.normal, toCamera) < 0.22
     }
     // MARK: - Interacción con el dedo (respaldo del tracking de manos)
 
