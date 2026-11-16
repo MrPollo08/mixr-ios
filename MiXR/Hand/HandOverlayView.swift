@@ -238,8 +238,8 @@ final class HandOverlayView: UIView {
 
         var armDir = pose.forearm.direction2D
         if !armDir.x.isFinite || !armDir.y.isFinite || (abs(armDir.x) + abs(armDir.y)) < 0.01 {
-            armDir = normalizePoint(CGPoint(x: wrist.x - middleMCP.x, y: wrist.y - middleMCP.y),
-                                   fallback: CGPoint(x: 0, y: 1))
+            armDir = Self.normalizePoint(CGPoint(x: wrist.x - middleMCP.x, y: wrist.y - middleMCP.y),
+                                        fallback: CGPoint(x: 0, y: 1))
         }
         let armLength = max(hypot(pose.forearm.elbow2D.x - wrist.x,
                                   pose.forearm.elbow2D.y - wrist.y), scale * 1.2)
