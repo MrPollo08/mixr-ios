@@ -57,7 +57,10 @@ final class GestureEngine {
 
     // Menú universal
     private var lastUniversalAt: CFTimeInterval = 0
+    private var menuHoldSince: CFTimeInterval?
     private let universalCooldown: CFTimeInterval = 1.4
+    /// Tiempo que hay que mantener "palma abierta + pinza" para evitar disparos falsos.
+    private let menuHoldTime: CFTimeInterval = 0.30
 
     // Arrastre
     private var dragStartPoint: CGPoint = .zero
@@ -88,14 +91,25 @@ final class GestureEngine {
         let now = CACurrentMediaTime()
         let primary = poses.first
 
-        // --- Gesto 3: menú universal (palma abierta de frente + pinza) ---
-        for hand in poses where hand.isPalmFacingCamera && hand.openPalm {
-            if hand.pinch >= pinchEnter, now - lastUniversalAt > universalCooldown {
+        // --- Gesto 3: menú universal (palma abierta de frente + pinza sostenida) ---
+        var palmMenuActive = false
+        for hand in poses where hand.isPalmFacingCamera && hand.isOpenHand && hand.pinch >= pinchEnter {
+            palmMenuActive = true
+            if menuHoldSince == nil { menuHoldSince = now }
+            break
+        }
+        if palmMenuActive {
+            if let since = menuHoldSince,
+               now - since >= menuHoldTime,
+               now - lastUniversalAt > universalCooldown {
                 lastUniversalAt = now
+                menuHoldSince = nil
                 onEvent?(.universalMenu)
                 reset()
                 return
             }
+        } else {
+            menuHoldSince = nil
         }
 
         // --- Gesto 4: Direct Touch (yema apoyada sobre una ventana) ---

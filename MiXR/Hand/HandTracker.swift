@@ -73,7 +73,24 @@ struct HandPose {
     /// Escala de la palma en puntos de pantalla (muñeca → nudillo medio).
     let palmScale: CGFloat
 
-    var isPalmFacingCamera: Bool { palmFacingScore > 0.15 }
+    var isPalmFacingCamera: Bool { palmFacingScore > 0.35 }
+
+    /// Tres dedos (medio, anular y meñique) claramente extendidos: es lo que
+    /// distingue "mano abierta" de un gesto de pinza o de señalar.
+    var isOpenHand: Bool {
+        guard let wrist = joints[.wrist] else { return false }
+        let pairs: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
+            (.middleTip, .middleMCP), (.ringTip, .ringMCP), (.littleTip, .littleMCP)
+        ]
+        var extended = 0
+        for (tipName, mcpName) in pairs {
+            guard let tip = joints[tipName], let mcp = joints[mcpName] else { continue }
+            let tipDistance = hypot(tip.x - wrist.x, tip.y - wrist.y)
+            let mcpDistance = max(hypot(mcp.x - wrist.x, mcp.y - wrist.y), 1)
+            if tipDistance / mcpDistance > 1.25 { extended += 1 }
+        }
+        return extended == 3
+    }
 
     /// Desproyecta/reproyecta las 21 articulaciones y el antebrazo a la cámara de un
     /// ojo concreto para conseguir disparidad estereoscópica real en la caja VR.
@@ -398,10 +415,12 @@ final class HandTracker {
                                             jointDepths: jointDepths,
                                             fallbackDepth: palmDepth)
             let palmNormal = Self.computePalmNormal(jointsCamera3D: cameraJoints)
+            // La cámara mira hacia -Z. El signo del producto depende de la lateralidad
+            // (x de la imagen es simétrico), así que se normaliza con la quiralidad de Vision
+            // para que "palma hacia el teléfono" sea siempre positivo.
             let facing: Float = {
-                // La cámara mira hacia -Z: si la normal apunta a +Z, la palma encara al teléfono.
-                let viewAxis = simd_float3(0, 0, 1)
-                return simd_dot(palmNormal, viewAxis)
+                let chiralitySign: Float = (observation.chirality == .left) ? 1 : -1
+                return simd_dot(palmNormal, simd_float3(0, 0, 1)) * chiralitySign
             }()
 
             // 5. Gestos geométricos.
