@@ -93,6 +93,7 @@ final class XRSession: NSObject, ObservableObject {
     private let volumeButtons = VolumeButtons()
     @Published var captureMode = false
     @Published var captureStatus = ""
+    @Published var captureCountsText = ""
     @Published var showsCapturePanel = false
     @Published var captureURLText = ""
 
@@ -244,6 +245,7 @@ final class XRSession: NSObject, ObservableObject {
 
     private func refreshCaptureStatus() {
         captureStatus = recorder.statusText
+        captureCountsText = recorder.countsText
         if let ip = LocalIP.wifiAddress() {
             captureURLText = "http://\(ip):47320/dataset.csv"
         } else {
@@ -808,6 +810,8 @@ final class XRSession: NSObject, ObservableObject {
             }
             if debugText != text + extra { debugText = text + extra }
             if captureStatus != recorder.statusText { captureStatus = recorder.statusText }
+            let counts = recorder.countsText
+            if captureCountsText != counts { captureCountsText = counts }
         }
     }
 

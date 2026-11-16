@@ -103,6 +103,8 @@ final class GestureDatasetRecorder {
     private(set) var label: GestureLabel = .rest
     private(set) var totalRows = 0
     private(set) var sessionRows = 0
+    /// Muestras por gesto: sin esto no se sabe si el dataset sirve.
+    private(set) var labelCounts: [Int] = Array(repeating: 0, count: GestureLabel.allCases.count)
 
     private var buffer: [String] = []
     private var lastSampleAt: CFTimeInterval = 0
@@ -115,7 +117,7 @@ final class GestureDatasetRecorder {
     }
 
     init() {
-        totalRows = existingRowCount()
+        loadExistingCounts()
     }
 
     func nextLabel() {
@@ -152,6 +154,7 @@ final class GestureDatasetRecorder {
         }
         buffer.append(line)
         sessionRows += 1
+        labelCounts[label.rawValue] += 1
     }
 
     private func flush() {
@@ -181,11 +184,39 @@ final class GestureDatasetRecorder {
         return max(text.split(separator: "\n").count - 1, 0)
     }
 
+    /// Relee el CSV para reconstruir el total y el desglose por gesto.
+    private func loadExistingCounts() {
+        labelCounts = Array(repeating: 0, count: GestureLabel.allCases.count)
+        totalRows = 0
+        guard let url = fileURL,
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+
+        for (index, line) in text.split(separator: "\n").enumerated() {
+            if index == 0 { continue }  // cabecera
+            guard let first = line.first, let value = Int(String(first)),
+                  value >= 0, value < labelCounts.count else { continue }
+            labelCounts[value] += 1
+            totalRows += 1
+        }
+    }
+
+    /// Desglose compacto para el panel.
+    var countsText: String {
+        var parts: [String] = []
+        for label in GestureLabel.allCases {
+            parts.append("\(label.shortName.prefix(2))\(labelCounts[label.rawValue])")
+        }
+        return parts.joined(separator: "  ")
+    }
+
     func clearDataset() {
         guard let url = fileURL else { return }
         try? FileManager.default.removeItem(at: url)
         totalRows = 0
         sessionRows = 0
+        labelCounts = Array(repeating: 0, count: GestureLabel.allCases.count)
+        buffer.removeAll()
+        isRecording = false
     }
 
     var statusText: String {

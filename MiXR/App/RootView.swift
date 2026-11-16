@@ -54,6 +54,12 @@ struct RootView: View {
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .foregroundColor(.cyan)
 
+            if !session.captureCountsText.isEmpty {
+                Text(session.captureCountsText)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.75))
+            }
+
             Button {
                 session.toggleCaptureMode()
             } label: {
@@ -92,6 +98,18 @@ struct RootView: View {
                     }
                     .buttonStyle(.plain)
                 }
+
+                Button {
+                    session.clearCaptureDataset()
+                } label: {
+                    Text("Borrar todo")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.8))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
 
                 if !session.captureURLText.isEmpty {
                     Text(session.captureURLText)
