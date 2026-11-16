@@ -34,6 +34,8 @@ final class XRSession: NSObject, ObservableObject {
     @Published var framing = 2
     /// Autofoco continuo (true) o enfoque bloqueado (false, lo que evita el desenfoque).
     @Published var autofocusEnabled = false
+    /// Mano fantasma (segmentación) en vez de la malla sintética.
+    @Published var ghostHandEnabled = true
 
     var framingName: String {
         switch framing {
@@ -66,7 +68,8 @@ final class XRSession: NSObject, ObservableObject {
     private let dim = UIView()
     let camera = CameraSampleView()
     let hostView = WindowHostView()
-    let occlusionView = HandOcclusionView()
+    /// Mano fantasma: recorte real de la cámara, translúcido, encima de las ventanas.
+    let ghostView = HandGhostView()
     let overlay = HandOverlayView()
 
     private let leftPane = StereoPane()
@@ -115,11 +118,10 @@ final class XRSession: NSObject, ObservableObject {
         dim.layer.zPosition = 1
         camera.layer.zPosition = 2
         hostView.layer.zPosition = 100
-        occlusionView.layer.zPosition = 900
-        occlusionView.isHidden = true
+        ghostView.layer.zPosition = 900
         overlay.layer.zPosition = 1000
 
-        for subview in [backdrop, dim, camera, hostView, occlusionView, overlay] as [UIView] {
+        for subview in [backdrop, dim, camera, hostView, ghostView, overlay] as [UIView] {
             subview.frame = view.bounds
             subview.autoresizingMask = []
             view.addSubview(subview)
@@ -127,7 +129,7 @@ final class XRSession: NSObject, ObservableObject {
 
         hostView.session = self
         overlay.isUserInteractionEnabled = false
-        overlay.showsSkeleton = true
+        overlay.showsSkeleton = false
 
         stereoRoot.frame = view.bounds
         stereoRoot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -147,11 +149,31 @@ final class XRSession: NSObject, ObservableObject {
         doubleTap.cancelsTouchesInView = false
         view.addGestureRecognizer(doubleTap)
 
+        // Triple toque: alterna mano fantasma / malla sintética.
+        let tripleTap = UITapGestureRecognizer(target: self, action: #selector(handleTripleTap))
+        tripleTap.numberOfTapsRequired = 3
+        tripleTap.cancelsTouchesInView = false
+        view.addGestureRecognizer(tripleTap)
+        doubleTap.require(toFail: tripleTap)
+
         return view
     }()
 
     @objc private func handleDoubleTap() {
         toggleAutofocus()
+    }
+
+    @objc private func handleTripleTap() {
+        toggleHandVisual()
+    }
+
+    /// Alterna entre **mano fantasma** (segmentación, por defecto) y la malla sintética.
+    func toggleHandVisual() {
+        ghostHandEnabled.toggle()
+        ghostView.isHidden = !ghostHandEnabled
+        overlay.showsSkeleton = !ghostHandEnabled
+        if !ghostHandEnabled { ghostView.clear() }
+        status = ghostHandEnabled ? "Mano fantasma" : "Malla sintética"
     }
 
     override init() {
@@ -186,7 +208,7 @@ final class XRSession: NSObject, ObservableObject {
         arSession.pause()
         arStarted = false
         gestures.reset()
-        occlusionView.clear()
+        ghostView.clear()
     }
 
     private func startARKit(forceReset: Bool = false) {
@@ -439,8 +461,7 @@ final class XRSession: NSObject, ObservableObject {
         let rect = Self.cameraRect(aspect: aspect, screen: screen, fraction: visibleFraction)
 
         camera.frame = rect
-        occlusionView.frame = rect
-        occlusionView.isHidden = true
+        ghostView.frame = rect
         hostView.bounds = CGRect(origin: .zero, size: rect.size)
         hostView.center = CGPoint(x: rect.midX, y: rect.midY)
         overlay.bounds = hostView.bounds
@@ -463,6 +484,13 @@ final class XRSession: NSObject, ObservableObject {
 
         overlay.render(poses: predictedHands())
         hostView.layout(pose: pose)
+
+        // Mano fantasma: se alimenta con el frame *actual* de la cámara (60 Hz) y ella
+        // misma limita la segmentación (~18 Hz). Así el recorte va pegado al video.
+        ghostView.update(buffer: frame.capturedImage,
+                         hands: lastHands,
+                         orientation: orientation)
+
         if stereoEnabled {
             updateStereoPanes(pose: pose, buffer: frame.capturedImage, cameraSize: rect.size)
         }
@@ -613,7 +641,7 @@ final class XRSession: NSObject, ObservableObject {
 
     private func applyStereoMode() {
         stereoRoot.isHidden = !stereoEnabled
-        for view in [backdrop, dim, camera, hostView, occlusionView, overlay] as [UIView] {
+        for view in [backdrop, dim, camera, hostView, ghostView, overlay] as [UIView] {
             view.isHidden = stereoEnabled
         }
 

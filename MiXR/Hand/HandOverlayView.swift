@@ -165,21 +165,19 @@ final class HandOverlayView: UIView {
 
     // MARK: - Silueta
 
-    private func renderSilhouette(pose: HandPose, group: HandMeshGroup) {
+    /// Construye la silueta (mano + antebrazo) como unión de cápsulas.
+    /// Es `static` para que la use también el pase de segmentación como máscara de respaldo.
+    static func silhouettePath(for pose: HandPose) -> CGPath? {
         let joints = pose.joints
-        guard let wrist = joints[.wrist], let middleMCP = joints[.middleMCP] else {
-            group.clear()
-            return
-        }
+        guard let wrist = joints[.wrist], let middleMCP = joints[.middleMCP] else { return nil }
 
         let scale = min(max(pose.palmScale, 14), 340)
         let path = CGMutablePath()
 
-        // --- Antebrazo ---
         var armDir = pose.forearm.direction2D
         if !armDir.x.isFinite || !armDir.y.isFinite || (abs(armDir.x) + abs(armDir.y)) < 0.01 {
-            armDir = normalize(CGPoint(x: wrist.x - middleMCP.x, y: wrist.y - middleMCP.y),
-                               fallback: CGPoint(x: 0, y: 1))
+            armDir = normalizePoint(CGPoint(x: wrist.x - middleMCP.x, y: wrist.y - middleMCP.y),
+                                    fallback: CGPoint(x: 0, y: 1))
         }
         let armLength = max(hypot(pose.forearm.elbow2D.x - wrist.x,
                                   pose.forearm.elbow2D.y - wrist.y), scale * 1.2)
@@ -189,7 +187,6 @@ final class HandOverlayView: UIView {
         addCapsule(to: path, from: wrist, to: elbow,
                    rA: scale * 0.330, rB: scale * 0.395)
 
-        // --- Volumen de la palma ---
         let hullNames: [VNHumanHandPoseObservation.JointName] = [
             .wrist, .thumbCMC, .indexMCP, .middleMCP, .ringMCP, .littleMCP
         ]
@@ -213,8 +210,6 @@ final class HandOverlayView: UIView {
                        rA: scale * radius, rB: scale * radius * 0.94)
         }
 
-        // --- 19 huesos ---
-        // Los más lejanos primero: los dedos que están delante quedan encima.
         let orderedBones = pose.bones3D.sorted { $0.depthMeters > $1.depthMeters }
         for bone in orderedBones {
             addCapsule(to: path,
@@ -224,10 +219,30 @@ final class HandOverlayView: UIView {
                        rB: scale * bone.definition.radiusEndRatio)
         }
 
-        guard !path.isEmpty else {
+        return path.isEmpty ? nil : path
+    }
+
+    private func renderSilhouette(pose: HandPose, group: HandMeshGroup) {
+        guard let path = Self.silhouettePath(for: pose) else {
             group.clear()
             return
         }
+
+        let joints = pose.joints
+        guard let wrist = joints[.wrist], let middleMCP = joints[.middleMCP] else {
+            group.clear()
+            return
+        }
+
+        let scale = min(max(pose.palmScale, 14), 340)
+
+        var armDir = pose.forearm.direction2D
+        if !armDir.x.isFinite || !armDir.y.isFinite || (abs(armDir.x) + abs(armDir.y)) < 0.01 {
+            armDir = normalizePoint(CGPoint(x: wrist.x - middleMCP.x, y: wrist.y - middleMCP.y),
+                                   fallback: CGPoint(x: 0, y: 1))
+        }
+        let armLength = max(hypot(pose.forearm.elbow2D.x - wrist.x,
+                                  pose.forearm.elbow2D.y - wrist.y), scale * 1.2)
 
         // --- Desvanecido del antebrazo ---
         let w = max(bounds.width, 1)
@@ -266,7 +281,7 @@ final class HandOverlayView: UIView {
 
     // MARK: - Primitivas
 
-    private func normalize(_ p: CGPoint, fallback: CGPoint) -> CGPoint {
+    static func normalizePoint(_ p: CGPoint, fallback: CGPoint) -> CGPoint {
         let len = hypot(p.x, p.y)
         guard len > 1e-4 else { return fallback }
         return CGPoint(x: p.x / len, y: p.y / len)
@@ -274,7 +289,7 @@ final class HandOverlayView: UIView {
 
     /// Cápsula cónica. Todos los subpaths se fuerzan al mismo sentido de giro para que
     /// `fillRule = .nonZero` no abra huecos en las uniones.
-    private func addCapsule(to path: CGMutablePath,
+    static func addCapsule(to path: CGMutablePath,
                             from a: CGPoint,
                             to b: CGPoint,
                             rA: CGFloat,
@@ -330,7 +345,7 @@ final class HandOverlayView: UIView {
     }
 
     /// Polígono cerrado con área positiva garantizada (sentido de giro consistente).
-    private func addPolygon(to path: CGMutablePath, points: [CGPoint]) {
+    static func addPolygon(to path: CGMutablePath, points: [CGPoint]) {
         guard points.count >= 3 else { return }
 
         var area: CGFloat = 0
