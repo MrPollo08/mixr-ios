@@ -420,8 +420,8 @@ final class HandTracker {
             if let t3 = cameraJoints[.thumbTip], let i3 = cameraJoints[.indexTip] {
                 let metric = simd_distance(t3, i3)
                 // Palma adulta ≈ 8.8 cm -> un roce útil está por debajo de 2.6 cm.
-                let metricPinch = Float(min(max(1.0 - (metric - 0.008) / 0.030, 0.0), 1.0))
-                pinch = CGFloat(max(pinch, metricPinch))
+                let metricPinch = min(max(1.0 - (metric - 0.008) / 0.030, 0.0), 1.0)
+                pinch = max(pinch, CGFloat(metricPinch))
             }
 
             var keyConfidence: CGFloat = 1
