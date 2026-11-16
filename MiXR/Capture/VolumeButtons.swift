@@ -7,7 +7,7 @@ import UIKit
 /// Sirve para etiquetar y grabar dentro de una caja VR, donde no se puede tocar la
 /// pantalla. Se apoya en la `AVAudioSession` y oculta el HUD del sistema con un
 /// `MPVolumeView` fuera de pantalla.
-final class VolumeButtons {
+final class VolumeButtons: NSObject {
 
     private let session = AVAudioSession.sharedInstance()
     private var lastVolume: Float = 0
@@ -15,6 +15,10 @@ final class VolumeButtons {
     private var onUp: (() -> Void)?
     private var onDown: (() -> Void)?
     private var observing = false
+
+    override init() {
+        super.init()
+    }
 
     func start(onUp: @escaping () -> Void, onDown: @escaping () -> Void) {
         self.onUp = onUp
