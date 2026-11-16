@@ -5,61 +5,43 @@ import simd
 
 /// Eventos que el motor de gestos comunica a la sesión XR.
 enum GestureEvent {
-    /// Seleccionar / hacer clic (pinza corta sobre algo).
     case click(CGPoint)
-    /// Desplazarse: pinza mantenida + movimiento de la mano.
     case scroll(CGPoint, CGSize)
-    /// Tocar directamente con la yema del índice (sin pinza).
     case directTouch(CGPoint)
-    /// Empezó / terminó de arrastrar una ventana.
     case grabBegan
     case grabEnded
 }
 
-/// Motor de gestos espaciales.
+/// Motor de gestos **dirigido por eventos**, no por polling.
 ///
-/// 1. **Seleccionar / clic** — pinza corta sobre algo.
-/// 2. **Scroll** — pinza mantenida y desplazamiento de la mano.
-/// 3. **Direct Touch** — la yema del índice toca la superficie de una ventana.
-/// 4. **Mover ventanas** — pinza en el borde o en la barra lateral + arrastre 3D.
+/// La diferencia clave: el toque se decide en el **instante del cruce del umbral**
+/// (interpolado entre frames), no cuando la pinza termina. Eso es lo que elimina el
+/// falso retraso — el evento existe en el momento en que la mano lo hace.
 ///
-/// El arrastre se hace con la posición **3D de la mano en el mundo**, no con el
-/// desplazamiento en pantalla: así la ventana sigue a la mano aunque muevas la cabeza
-/// (la base de la cámara ya no se mezcla con el movimiento) y no se dispara.
+/// Se evalúa a la frecuencia de la pantalla con la pose ya suavizada/predicha, así que
+/// no depende de que Vision entregue un frame justo en ese instante.
 final class GestureEngine {
-
-    enum State {
-        case idle
-        case pinching(target: SpatialWindow?, start: CGPoint, at: CFTimeInterval)
-        case scrolling(target: SpatialWindow?, last: CGPoint)
-        case dragging(window: SpatialWindow)
-    }
 
     var onEvent: ((GestureEvent) -> Void)?
 
-    private var state: State = .idle
-    private var lastSeenAt: CFTimeInterval = 0
-    /// Tolerancia a micro-pérdidas de Vision durante un arrastre.
-    private let grace: TimeInterval = 0.45
-
-    /// Umbrales (puntos de pantalla).
-    private let scrollThreshold: CGFloat = 13
-    private let clickMaxDuration: CFTimeInterval = 0.45
-    private let clickMaxTravel: CGFloat = 15
-
-    /// Histéresis de pinza.
     private let pinchEnter: CGFloat = 0.62
     private let pinchExit: CGFloat = 0.40
+    /// Un toque válido: corto y sin desplazamiento.
+    private let clickMaxDuration: CFTimeInterval = 0.55
+    private let clickMaxTravel: CGFloat = 22
+    /// Desplazamiento que convierte el agarre en scroll.
+    private let scrollThreshold: CGFloat = 14
+    private let grace: CFTimeInterval = 0.45
 
-    /// Se acepta **pinza pulgar-índice** *o* **puño cerrado**: agarrar una ventana como
-    /// si fuera un objeto físico es con el puño, y era el gesto que no se detectaba.
-    private func grabs(_ hand: HandPose) -> Bool {
-        hand.pinch >= pinchEnter || hand.closedFist
-    }
+    private let pinchTracker = PinchTracker()
 
-    private func holds(_ hand: HandPose) -> Bool {
-        hand.pinch >= pinchExit || hand.closedFist
-    }
+    private var dragWindow: SpatialWindow?
+    private var pressCandidate: SpatialWindow?
+    private var pressStart: CGPoint = .zero
+    private var pressStartedAt: CFTimeInterval = 0
+    private var scrollTarget: SpatialWindow?
+    private var scrollLastPoint: CGPoint = .zero
+    private var lastSeenAt: CFTimeInterval = 0
 
     // Direct Touch
     private var touchLatched: [String: Bool] = [:]
@@ -70,147 +52,154 @@ final class GestureEngine {
     private var dragStartPosition: simd_float3 = .zero
     private var dragStartHandWorld: simd_float3 = .zero
     private var dragHas3D = false
-    /// Base congelada al agarrar (sólo se usa si el 3D no está disponible).
     private var dragRight: simd_float3 = simd_float3(1, 0, 0)
     private var dragUp: simd_float3 = simd_float3(0, 1, 0)
     private var dragPointsPerMeter: CGFloat = 600
     private var dragStartCamera: simd_float3 = .zero
-    /// Suavizado adaptativo de la posición de la ventana mientras se arrastra.
     private var dragFilter = OneEuroFilter3D(minCutoffXY: 3.4, betaXY: 3.6,
                                              minCutoffZ: 1.4, betaZ: 1.0,
                                              dCutoff: 1.0)
 
-    var isDragging: Bool {
-        if case .dragging = state { return true }
-        return false
-    }
+    var isDragging: Bool { dragWindow != nil }
+
+    /// Para el readout: si está agarrando en este frame.
+    var isEngaged: Bool { dragWindow != nil || pressCandidate != nil }
 
     func reset() {
-        if case .dragging(let window) = state {
-            window.view.setGrabbed(false)
-            window.view.setGrabBar(near: false)
-        }
-        state = .idle
+        dragWindow?.view.setGrabbed(false)
+        dragWindow?.view.setGrabBar(near: false)
+        dragWindow = nil
+        pressCandidate = nil
+        scrollTarget = nil
+        pinchTracker.reset()
         touchLatched.removeAll()
         dragFilter.reset()
     }
 
-    // MARK: - Ciclo por frame
+    // MARK: - Ciclo (se llama a la frecuencia de pantalla)
 
     func update(poses: [HandPose], host: WindowHostView, pose: CameraPose) {
         let now = CACurrentMediaTime()
-        let primary = poses.first
 
-        // --- Direct Touch (yema apoyada sobre una ventana) ---
         handleDirectTouch(poses: poses, host: host, pose: pose, now: now)
 
-        // HISTÉRESIS DE VERDAD: para *empezar* hace falta 0.62, pero para *seguir*
-        // agarrando alcanza 0.40. Sin esto, el valor de pinza oscilaba alrededor del
-        // umbral con el puño y el agarre se soltaba y re-enganchaba en cada frame:
-        // resultado, la ventana se quedaba clavada donde estaba.
-        let startPinching = poses.filter { grabs($0) }
-        let holdingPinching = poses.filter { holds($0) }
-        let pinching = state.isPinchingLike ? holdingPinching : startPinching
-        let anyPinching = !pinching.isEmpty
-
-        if !anyPinching && state.isPinchingLike {
-            // Soltó la pinza.
-            if case .pinching(let target, let start, let at) = state, let hand = primary {
-                let travel = hypot(hand.pinchPoint.x - start.x, hand.pinchPoint.y - start.y)
-                if now - at <= clickMaxDuration && travel <= clickMaxTravel {
-                    let point = hand.pinchPoint
-                    if let target, let press = target.pressAt, press(point) {
-                        // El contenido ya consumió el clic.
-                    } else if let target, let clickAt = target.clickAt {
-                        _ = clickAt(point)
-                    }
-                    onEvent?(.click(point))
-                }
+        guard let hand = poses.first else {
+            // Sin mano: si hay arrastre activo se sostiene un instante y después se suelta.
+            if dragWindow != nil, now - lastSeenAt > grace {
+                endDrag()
             }
-            if case .dragging(let window) = state {
-                window.view.setGrabbed(false)
-                window.view.setGrabBar(near: false)
-                onEvent?(.grabEnded)
-            }
-            state = .idle
+            updateHover(poses: poses, host: host)
             return
         }
+        lastSeenAt = now
 
-        switch state {
-        case .idle:
-            guard let hand = pinching.first else {
-                updateHover(poses: poses, host: host)
-                return
+        let value = grabValue(hand)
+        let crossing = pinchTracker.update(key: hand.key,
+                                           value: value,
+                                           point: hand.pinchPoint,
+                                           time: now,
+                                           enter: pinchEnter,
+                                           exit: pinchExit)
+
+        if let crossing {
+            if crossing.isDown {
+                handleDown(hand: hand,
+                           at: crossing.point,
+                           time: crossing.time,
+                           host: host,
+                           pose: pose)
+            } else {
+                handleUp(at: crossing.point, time: crossing.time)
             }
-            beginPinch(with: hand, host: host, pose: pose, now: now)
+        }
 
-        case .pinching(let target, let start, let at):
-            guard let hand = pinching.first else { return }
-            lastSeenAt = now
-
-            let travel = hypot(hand.pinchPoint.x - start.x, hand.pinchPoint.y - start.y)
-            if travel > scrollThreshold, let target, target.scrollAt != nil {
-                state = .scrolling(target: target, last: hand.pinchPoint)
-                return
-            }
-            if now - at > clickMaxDuration, let target, target.scrollAt != nil {
-                state = .scrolling(target: target, last: hand.pinchPoint)
-            }
-
-        case .scrolling(let target, let last):
-            guard let hand = pinching.first else { return }
-            lastSeenAt = now
-            let delta = CGSize(width: hand.pinchPoint.x - last.x,
-                               height: hand.pinchPoint.y - last.y)
-            if abs(delta.height) + abs(delta.width) > 0.4, let target, let scroll = target.scrollAt {
+        // Acciones continuas mientras el agarre está activo.
+        if let window = dragWindow {
+            moveWindow(window, with: hand, pose: pose, host: host)
+        } else if let target = scrollTarget {
+            let delta = CGSize(width: hand.pinchPoint.x - scrollLastPoint.x,
+                               height: hand.pinchPoint.y - scrollLastPoint.y)
+            if abs(delta.width) + abs(delta.height) > 0.3, let scroll = target.scrollAt {
                 _ = scroll(hand.pinchPoint, delta)
                 onEvent?(.scroll(hand.pinchPoint, delta))
             }
-            state = .scrolling(target: target, last: hand.pinchPoint)
-
-        case .dragging(let window):
-            guard let hand = pinching.first else {
-                // Micro-pérdida: se mantiene el agarre sin mover, así no salta.
-                if now - lastSeenAt < grace { return }
-                window.view.setGrabbed(false)
-                window.view.setGrabBar(near: false)
-                onEvent?(.grabEnded)
-                state = .idle
-                return
-            }
-            lastSeenAt = now
-            moveWindow(window, with: hand, pose: pose, host: host)
+            scrollLastPoint = hand.pinchPoint
+        } else if pressCandidate == nil {
+            updateHover(poses: poses, host: host)
         }
     }
 
-    // MARK: - Inicio de pinza
+    // MARK: - Señal de agarre
 
-    private func beginPinch(with hand: HandPose,
+    /// Pinza pulgar-índice **o** puño cerrado, en una sola señal continua.
+    private func grabValue(_ hand: HandPose) -> CGFloat {
+        let pinch = pinchValue(hand)
+        return hand.closedFist ? max(pinch, 0.85) : pinch
+    }
+
+    /// Se recalcula en cada frame desde las articulaciones (ya suavizadas/predichas),
+    /// así no depende de cuándo llegó el último frame de Vision.
+    private func pinchValue(_ hand: HandPose) -> CGFloat {
+        guard let thumb = hand.joints[.thumbTip],
+              let index = hand.joints[.indexTip],
+              let wrist = hand.joints[.wrist],
+              let middle = hand.joints[.middleMCP] else {
+            return hand.pinch
+        }
+        let palm = max(hypot(wrist.x - middle.x, wrist.y - middle.y), 8)
+        let ratio = hypot(thumb.x - index.x, thumb.y - index.y) / palm
+        return min(max(1 - ratio / 0.9, 0), 1)
+    }
+
+    // MARK: - Cruce hacia abajo: empezar
+
+    private func handleDown(hand: HandPose,
+                            at point: CGPoint,
+                            time: CFTimeInterval,
                             host: WindowHostView,
-                            pose: CameraPose,
-                            now: CFTimeInterval) {
-        lastSeenAt = now
-
-        // Borde o barra lateral → arrastrar (se amplió el margen para que sea fácil).
-        if let byBar = host.window(atBar: hand.pinchPoint) {
+                            pose: CameraPose) {
+        // Borde o barra lateral → arrastrar.
+        if let byBar = host.window(atBar: point) {
             startDrag(window: byBar, with: hand, host: host, pose: pose)
             return
         }
-        if let byBorder = host.window(nearBorder: hand.pinchPoint, margin: 72) {
+        if let byBorder = host.window(nearBorder: point, margin: 72) {
             startDrag(window: byBorder, with: hand, host: host, pose: pose)
             return
         }
-        if let tip = hand.joints[.indexTip],
-           let byTipBorder = host.window(nearBorder: tip, margin: 72) {
-            startDrag(window: byTipBorder, with: hand, host: host, pose: pose)
+
+        // Contenido → candidato a clic. Se da feedback **ya**, sin esperar al release.
+        if let target = host.window(at: point) ?? host.window(near: point, margin: 20) {
+            pressCandidate = target
+            pressStart = point
+            pressStartedAt = time
+            scrollTarget = nil
+            if let press = target.pressAt { _ = press(point) }
+        }
+    }
+
+    // MARK: - Cruce hacia arriba: terminar
+
+    private func handleUp(at point: CGPoint, time: CFTimeInterval) {
+        if dragWindow != nil {
+            endDrag()
             return
         }
 
-        // Si no hay borde: potencial clic o scroll sobre la ventana de debajo.
-        let target = host.window(at: hand.pinchPoint) ?? host.window(near: hand.pinchPoint, margin: 24)
-        state = .pinching(target: target, start: hand.pinchPoint, at: now)
-        host.setGrabbed(target, grabbed: false)
+        if let target = pressCandidate {
+            let travel = hypot(point.x - pressStart.x, point.y - pressStart.y)
+            let duration = time - pressStartedAt
+            if scrollTarget == nil, duration <= clickMaxDuration, travel <= clickMaxTravel {
+                if let clickAt = target.clickAt { _ = clickAt(point) }
+                onEvent?(.click(point))
+            }
+        }
+
+        pressCandidate = nil
+        scrollTarget = nil
     }
+
+    // MARK: - Arrastre
 
     private func startDrag(window: SpatialWindow,
                            with hand: HandPose,
@@ -227,44 +216,45 @@ final class GestureEngine {
                                  fallback: simd_float3(0, 1, 0))
         dragPointsPerMeter = window.pointsPerMeter > 1 ? window.pointsPerMeter : 600
 
-        // Posición 3D de la mano al agarrar: es la referencia del arrastre.
         dragStartHandWorld = hand.pinchWorld3D
         dragHas3D = simd_length(hand.pinchWorld3D) > 0.0001
             && hand.jointsWorld3D[.thumbTip] != nil
             && hand.jointsWorld3D[.indexTip] != nil
 
         dragFilter.reset()
+        pressCandidate = nil
+        scrollTarget = nil
 
         host.bringToFront(window)
         host.setGrabbed(window, grabbed: true)
-        state = .dragging(window: window)
+        dragWindow = window
         onEvent?(.grabBegan)
     }
 
-    /// Arrastre: la ventana sigue el desplazamiento **3D de la mano en el mundo**.
-    /// La profundidad va amortiguada porque el LiDAR en Z es mucho más ruidoso que X/Y.
+    private func endDrag() {
+        guard let window = dragWindow else { return }
+        window.view.setGrabbed(false)
+        window.view.setGrabBar(near: false)
+        dragWindow = nil
+        onEvent?(.grabEnded)
+    }
+
     private func moveWindow(_ window: SpatialWindow,
                             with hand: HandPose,
                             pose: CameraPose,
                             host: WindowHostView) {
-
         var target: simd_float3
 
         if dragHas3D, simd_length(hand.pinchWorld3D) > 0.0001 {
             var delta = hand.pinchWorld3D - dragStartHandWorld
             delta.z *= 0.35
 
-            // Tope de seguridad: si el salto es absurdo, se recorta.
             let maxDelta = Float(Config.maxWindowDistance)
             let jump = simd_length(delta)
-            if jump > maxDelta {
-                delta *= maxDelta / jump
-            }
+            if jump > maxDelta { delta *= maxDelta / jump }
 
             target = dragStartPosition + delta
         } else {
-            // Respaldo 2D con la base de cámara **congelada al agarrar**: mover la cabeza
-            // ya no inyecta movimiento en la ventana.
             let dx = hand.pinchPoint.x - dragStartPoint.x
             let dy = hand.pinchPoint.y - dragStartPoint.y
             let metersPerPoint = 1 / dragPointsPerMeter
@@ -273,7 +263,6 @@ final class GestureEngine {
             target = dragStartPosition + lateral
         }
 
-        // No se aleja/acerca más allá de los límites desde la cámara.
         let toTarget = target - dragStartCamera
         let distance = simd_length(toTarget)
         if distance > Float(Config.maxWindowDistance) {
@@ -283,8 +272,7 @@ final class GestureEngine {
                 * Float(Config.minWindowDistance)
         }
 
-        let smoothed = dragFilter.filter(target)
-        host.setPosition(window, smoothed, force: true)
+        host.setPosition(window, dragFilter.filter(target), force: true)
     }
 
     private static func normalized(_ v: simd_float3, fallback: simd_float3) -> simd_float3 {
@@ -326,8 +314,7 @@ final class GestureEngine {
                 continue
             }
 
-            let touching = bestDistance <= 0.035
-            if touching, touchLatched[hand.key] != true {
+            if bestDistance <= 0.035, touchLatched[hand.key] != true {
                 touchLatched[hand.key] = true
                 lastTouchEventAt = now
                 if let press = window.pressAt, press(bestPoint) {
@@ -365,15 +352,6 @@ final class GestureEngine {
 
         for window in host.windows {
             window.view.setGrabBar(near: host.grabBarRect(for: window).contains(pointer))
-        }
-    }
-}
-
-private extension GestureEngine.State {
-    var isPinchingLike: Bool {
-        switch self {
-        case .pinching, .scrolling, .dragging: return true
-        case .idle: return false
         }
     }
 }

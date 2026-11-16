@@ -586,8 +586,14 @@ final class XRSession: NSObject, ObservableObject {
 
         updateDebug(pose: pose, trackingState: frame.camera.trackingState)
 
-        overlay.render(poses: predictedHands())
+        let displayHands = predictedHands()
+        overlay.render(poses: displayHands)
         hostView.layout(pose: pose)
+
+        // Gestos a 60/120 Hz con la pose predicha: el cruce del umbral se detecta en el
+        // frame exacto, no cuando Vision entrega un resultado.
+        gestures.update(poses: displayHands, host: hostView, pose: pose)
+        syncAnchors(dragging: gestures.isDragging || gamepadMoving)
 
         // Mano fantasma: se alimenta con el frame *actual* de la cámara (60 Hz) y ella
         // misma limita la segmentación (~30 Hz). Así el recorte va pegado al video.
@@ -663,8 +669,8 @@ final class XRSession: NSObject, ObservableObject {
             return
         }
 
-        gestures.update(poses: poses, host: hostView, pose: pose)
-        syncAnchors(dragging: gestures.isDragging || gamepadMoving)
+        // Los gestos ya NO se actualizan acá: se evalúan en `tick()` a la frecuencia de
+        // pantalla con la pose predicha. Así el toque se decide en el frame exacto.
 
         if let hand = poses.first {
             let probe = hand.joints[.indexTip] ?? hand.pinchPoint
