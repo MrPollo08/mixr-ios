@@ -235,6 +235,8 @@ final class HandTracker {
     private let bodyRequest = VNDetectHumanBodyPoseRequest()
     private let handSequence = VNSequenceRequestHandler()
     private let bodySequence = VNSequenceRequestHandler()
+    /// Motor principal de manos (MediaPipe). Si no arranca, se usa Vision.
+    private let mediaPipe = MediaPipeHandTracker()
 
     private var filters2D: [String: [VNHumanHandPoseObservation.JointName: OneEuroFilter2D]] = [:]
     private var filters3D: [String: [VNHumanHandPoseObservation.JointName: OneEuroFilter3D]] = [:]
@@ -352,32 +354,54 @@ final class HandTracker {
                         timestamp: CFTimeInterval) -> [HandPose] {
         let projector = ImageProjector(viewportSize: viewportSize, imageAspect: imageAspect)
 
-        do {
-            try handSequence.perform([handRequest], on: pixelBuffer, orientation: orientation)
-        } catch {
-            return persistedPoses(seen: [], timestamp: timestamp)
+        // --- Detección: MediaPipe (principal) con Vision como respaldo ---
+        // `rawHands` lleva puntos normalizados (0…1, origen abajo-izquierda) para que el
+        // resto del pipeline sea idéntico sin importar qué motor detectó.
+        var rawHands: [(key: String, points: [VNHumanHandPoseObservation.JointName: CGPoint],
+                        chiralitySign: Float)] = []
+
+        if let mediaPipeHands = mediaPipe.detect(pixelBuffer: pixelBuffer,
+                                                  timestamp: timestamp,
+                                                  orientation: orientation) {
+            rawHands = mediaPipeHands.map {
+                (key: $0.key, points: $0.points, chiralitySign: $0.chiralitySign)
+            }
+        } else {
+            do {
+                try handSequence.perform([handRequest], on: pixelBuffer, orientation: orientation)
+            } catch {
+                return persistedPoses(seen: [], timestamp: timestamp)
+            }
+
+            for (index, observation) in (handRequest.results ?? []).enumerated() {
+                guard let raw = try? observation.recognizedPoints(.all) else { continue }
+                var points: [VNHumanHandPoseObservation.JointName: CGPoint] = [:]
+                for (name, point) in raw where point.confidence > 0.08 {
+                    points[name] = CGPoint(x: CGFloat(point.location.x),
+                                           y: CGFloat(point.location.y))
+                }
+                let key: String
+                switch observation.chirality {
+                case .left: key = "L"
+                case .right: key = "R"
+                default: key = "U\(index)"
+                }
+                let sign: Float = (observation.chirality == .left) ? 1 : -1
+                rawHands.append((key: key, points: points, chiralitySign: sign))
+            }
         }
 
-        let observations = handRequest.results ?? []
         var poses: [HandPose] = []
         var seen = Set<String>()
 
-        for observation in observations {
-            let key: String
-            switch observation.chirality {
-            case .left: key = "L"
-            case .right: key = "R"
-            default: key = "U\(poses.count)"
-            }
+        for hand in rawHands {
+            let key = hand.key
             guard !seen.contains(key) else { continue }
-
-            guard let raw = try? observation.recognizedPoints(.all) else { continue }
 
             // 1. Articulaciones 2D con One-Euro por punto.
             var joints2D: [VNHumanHandPoseObservation.JointName: CGPoint] = [:]
-            for (name, point) in raw where point.confidence > 0.08 {
-                let mapped = projector.map(CGPoint(x: CGFloat(point.location.x),
-                                                   y: CGFloat(point.location.y)))
+            for (name, normalized) in hand.points {
+                let mapped = projector.map(normalized)
                 joints2D[name] = filterJoint2D(key: key, name: name, value: mapped, timestamp: timestamp)
             }
 
@@ -497,8 +521,7 @@ final class HandTracker {
                                             jointDepths: jointDepths,
                                             fallbackDepth: palmDepth)
             let palmNormal = Self.computePalmNormal(jointsCamera3D: cameraJoints)
-            let chiralitySign: Float = (observation.chirality == .left) ? 1 : -1
-            let facing = simd_dot(palmNormal, simd_float3(0, 0, 1)) * chiralitySign
+            let facing = simd_dot(palmNormal, simd_float3(0, 0, 1)) * hand.chiralitySign
 
             // 6. Gestos.
             let thumb = joints2D[.thumbTip] ?? palmCenter
@@ -522,7 +545,7 @@ final class HandTracker {
 
             var keyConfidence: CGFloat = 1
             for name in [VNHumanHandPoseObservation.JointName.thumbTip, .indexTip, .middleMCP, .wrist] {
-                if let point = raw[name] { keyConfidence = min(keyConfidence, CGFloat(point.confidence)) }
+                if !hand.points.keys.contains(name) { keyConfidence = 0.5 }
             }
 
             poses.append(HandPose(key: key,
