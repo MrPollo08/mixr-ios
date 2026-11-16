@@ -51,6 +51,16 @@ final class GestureEngine {
     private let pinchEnter: CGFloat = 0.62
     private let pinchExit: CGFloat = 0.40
 
+    /// Se acepta **pinza pulgar-índice** *o* **puño cerrado**: agarrar una ventana como
+    /// si fuera un objeto físico es con el puño, y era el gesto que no se detectaba.
+    private func grabs(_ hand: HandPose) -> Bool {
+        hand.pinch >= pinchEnter || hand.closedFist
+    }
+
+    private func holds(_ hand: HandPose) -> Bool {
+        hand.pinch >= pinchExit || hand.closedFist
+    }
+
     // Direct Touch
     private var touchLatched: [String: Bool] = [:]
     private var lastTouchEventAt: CFTimeInterval = 0
@@ -94,7 +104,13 @@ final class GestureEngine {
         // --- Direct Touch (yema apoyada sobre una ventana) ---
         handleDirectTouch(poses: poses, host: host, pose: pose, now: now)
 
-        let pinching = poses.filter { $0.pinch >= pinchEnter }
+        // HISTÉRESIS DE VERDAD: para *empezar* hace falta 0.62, pero para *seguir*
+        // agarrando alcanza 0.40. Sin esto, el valor de pinza oscilaba alrededor del
+        // umbral con el puño y el agarre se soltaba y re-enganchaba en cada frame:
+        // resultado, la ventana se quedaba clavada donde estaba.
+        let startPinching = poses.filter { grabs($0) }
+        let holdingPinching = poses.filter { holds($0) }
+        let pinching = state.isPinchingLike ? holdingPinching : startPinching
         let anyPinching = !pinching.isEmpty
 
         if !anyPinching && state.isPinchingLike {

@@ -709,12 +709,15 @@ final class XRSession: NSObject, ObservableObject {
         }
 
         let depth = lastHands.first.map { String(format: "%.2fm", $0.depthMeters) } ?? "-"
+        let pinch = lastHands.first?.pinch ?? 0
+        let fist = (lastHands.first?.closedFist ?? false) ? 1 : 0
         let text = String(
-            format: "ARKit %@  %dfps  inf %d\nmanos %d  %@  lidar %@\nmascara %@ %@  seg %d\nfantasma %@  win %d",
+            format: "ARKit %@  %dfps  inf %d\nmanos %d  %@  P%.2f F%d\nmascara %@ %@  seg %d\nfantasma %@  win %d  drag %@",
             tracking, Int(fps.rounded()), lastInferenceWidth,
-            lastHands.count, depth, lidarActive ? "si" : "no",
+            lastHands.count, depth, Float(pinch), fist,
             ghostView.hasMask ? "si" : "no", ghostView.maskSizeText, ghostView.segmentationCount,
-            ghostView.hasContent ? "si" : "no", hostView.windows.count
+            ghostView.hasContent ? "si" : "no", hostView.windows.count,
+            gestures.isDragging ? "si" : "no"
         )
 
         if debugText != text { debugText = text }
