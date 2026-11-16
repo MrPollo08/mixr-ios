@@ -6,44 +6,37 @@ import UIKit
 import Vision
 import simd
 
-/// **Mano fantasma**: recorta la mano real de la imagen de cámara y la dibuja
-/// translúcida, con contorno blanco y halo, por encima de las ventanas.
+/// **Mano fantasma ("ghost hands")**: recorta la mano real de la imagen de cámara y la
+/// dibuja translúcida, con contorno blanco y halo, por encima de las ventanas.
 ///
-/// Es el efecto del video de referencia. Todo con frameworks nativos:
+/// Todo con frameworks nativos:
+/// - `VNGeneratePersonSegmentationRequest` (modelo de Apple, Neural Engine).
+/// - Respaldo geométrico con los 21 puntos de `VNDetectHumanHandPoseRequest`.
+/// - Composición Core Image / Metal.
 ///
-/// - **Segmentación**: `VNGeneratePersonSegmentationRequest` (modelo de Apple, corre en
-///   el Neural Engine). Se ejecuta en su propia cola a ~18 Hz.
-/// - **Respaldo geométrico**: si la segmentación falla o llega tarde, se usa la silueta
-///   que sale de los 21 puntos de Vision, así la mano **nunca** desaparece.
-/// - **Composición**: Core Image sobre Metal (GPU). Brillo elevado, alfa parcial y un
-///   borde blanco derivado de la propia máscara (`CIEdges` + blur = halo).
+/// El degradado del antebrazo se hace **dentro de Core Image** (gradiente × máscara),
+/// no con un `CAGradientLayer` de máscara: así no hay forma de que la capa quede
+/// invisible por un fallo del layer.
 final class HandGhostView: UIView {
 
     // MARK: - Ajustes visuales (calibrables contra la referencia)
 
-    /// Opacidad de la mano recortada. La referencia está en ~0.55.
-    private static let handAlpha: CGFloat = 0.55
-    /// Cuánto se aclara la mano respecto de la imagen original.
+    /// Opacidad de la mano recortada.
+    static let handAlpha: CGFloat = 0.55
     private static let brightnessLift: CGFloat = 0.14
     private static let contrastLift: CGFloat = 1.10
     /// Ancho del contorno blanco (en puntos) y difusión del halo.
     private static let contourWidth: CGFloat = 2.6
     private static let contourBlurRadius: CGFloat = 1.5
-    private static let contourAlpha: CGFloat = 1.0
 
-    /// El compuesto se calcula a media resolución y la capa lo estira: 4× menos píxeles.
     private static let outputScale: CGFloat = 0.5
-    /// La máscara no necesita más resolución que esta.
     private static let maskScale: CGFloat = 0.45
-    /// Cadencia máxima de la segmentación (~18 Hz).
     private static let maxSegmentationRate: CFTimeInterval = 0.055
-    /// Cadencia máxima de composición.
     private static let maxRenderRate: CFTimeInterval = 1.0 / 30.0
 
     private let imageLayer = CALayer()
     private let context: CIContext?
     private let segmentationQueue = DispatchQueue(label: "mixr.ghost-segmentation", qos: .userInitiated)
-    /// Cola separada: la composición no debe esperar a la segmentación.
     private let renderQueue = DispatchQueue(label: "mixr.ghost-render", qos: .userInitiated)
 
     private let segmentation = VNGeneratePersonSegmentationRequest()
@@ -59,6 +52,11 @@ final class HandGhostView: UIView {
     private var lastRenderAt: CFTimeInterval = 0
     private var renderBusy = false
 
+    /// Diagnóstico
+    private(set) var segmentationCount = 0
+    var hasMask: Bool { personMask != nil }
+    var hasContent: Bool { imageLayer.contents != nil }
+
     override init(frame: CGRect) {
         context = MTLCreateSystemDefaultDevice().map {
             CIContext(mtlDevice: $0, options: [.cacheIntermediates: false])
@@ -68,34 +66,16 @@ final class HandGhostView: UIView {
         backgroundColor = .clear
         isOpaque = false
         isUserInteractionEnabled = false
-        // Por encima de las ventanas (z = 100) y por debajo de la malla sintética (z = 1000).
         layer.zPosition = 900
 
         imageLayer.contentsGravity = .resize
         imageLayer.magnificationFilter = .linear
         imageLayer.minificationFilter = .linear
-
-        // Degradado alfa en el antebrazo: funde la mano con el brazo real.
-        let mask = CAGradientLayer()
-        mask.type = .axial
-        mask.colors = [
-            UIColor.white.cgColor,
-            UIColor.white.cgColor,
-            UIColor(white: 1.0, alpha: 0.5).cgColor,
-            UIColor.clear.cgColor
-        ]
-        mask.locations = [0.0, 0.36, 0.74, 1.0]
-        mask.frame = bounds
-        imageLayer.mask = mask
-        wristMask = mask
-
         layer.addSublayer(imageLayer)
 
         segmentation.qualityLevel = .balanced
         segmentation.outputPixelFormat = kCVPixelFormatType_OneComponent8
     }
-
-    private var wristMask: CAGradientLayer?
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) no se usa")
@@ -106,7 +86,6 @@ final class HandGhostView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         imageLayer.frame = bounds
-        wristMask?.frame = bounds
         CATransaction.commit()
     }
 
@@ -118,8 +97,6 @@ final class HandGhostView: UIView {
         self.buffer = buffer
         self.hands = hands
         self.orientation = orientation
-
-        updateWristFade(hand: hands.first)
 
         if let buffer {
             requestSegmentationIfNeeded(buffer)
@@ -135,39 +112,6 @@ final class HandGhostView: UIView {
         schedule()
     }
 
-    /// Orienta el degradado alfa a lo largo del antebrazo real, así el corte con el
-    /// brazo queda siempre perpendicular al brazo y no una banda horizontal fija.
-    private func updateWristFade(hand: HandPose?) {
-        guard let mask = wristMask else { return }
-        let w = max(bounds.width, 1)
-        let h = max(bounds.height, 1)
-
-        guard let hand, let wrist = hand.joints[.wrist] else {
-            mask.startPoint = CGPoint(x: 0.5, y: 0.0)
-            mask.endPoint = CGPoint(x: 0.5, y: 1.0)
-            return
-        }
-
-        let scale = min(max(hand.palmScale, 14), 340)
-        var dir = hand.forearm.direction2D
-        if !dir.x.isFinite || !dir.y.isFinite || (abs(dir.x) + abs(dir.y)) < 0.01 {
-            dir = CGPoint(x: 0, y: 1)
-        }
-        let armLength = max(hypot(hand.forearm.elbow2D.x - wrist.x,
-                                  hand.forearm.elbow2D.y - wrist.y), scale * 1.3)
-
-        let from = CGPoint(x: wrist.x - dir.x * (scale * 0.45),
-                           y: wrist.y - dir.y * (scale * 0.45))
-        let to = CGPoint(x: wrist.x + dir.x * (armLength * 0.92),
-                         y: wrist.y + dir.y * (armLength * 0.92))
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        mask.startPoint = CGPoint(x: from.x / w, y: from.y / h)
-        mask.endPoint = CGPoint(x: to.x / w, y: to.y / h)
-        CATransaction.commit()
-    }
-
     func clear() {
         imageLayer.contents = nil
         buffer = nil
@@ -175,12 +119,6 @@ final class HandGhostView: UIView {
         personMask = nil
     }
 
-    /// `true` si hay un compuesto en pantalla (lo usa la sesión para auto-respaldo).
-    var hasContent: Bool {
-        imageLayer.contents != nil
-    }
-
-    /// Pide la máscara de persona a Vision (Neural Engine) sin bloquear.
     private func requestSegmentationIfNeeded(_ buffer: CVPixelBuffer) {
         let now = CACurrentMediaTime()
         guard !segmentationBusy, now - lastSegmentationAt >= Self.maxSegmentationRate else { return }
@@ -190,9 +128,7 @@ final class HandGhostView: UIView {
         let orientation = self.orientation
         segmentationQueue.async { [weak self] in
             guard let self else { return }
-            defer {
-                DispatchQueue.main.async { self.segmentationBusy = false }
-            }
+            defer { DispatchQueue.main.async { self.segmentationBusy = false } }
 
             let handler = VNImageRequestHandler(
                 cvPixelBuffer: buffer,
@@ -201,9 +137,9 @@ final class HandGhostView: UIView {
             )
             do {
                 try handler.perform([self.segmentation])
-                if let result = self.segmentation.results?.first,
-                   let mask = try? result.pixelBuffer {
-                    self.personMask = mask
+                if let result = self.segmentation.results?.first {
+                    self.personMask = result.pixelBuffer
+                    self.segmentationCount += 1
                 }
             } catch {
                 self.personMask = nil
@@ -261,38 +197,45 @@ final class HandGhostView: UIView {
         let framed = aspectFill(source, into: rect)
 
         // --- Máscara: segmentación de persona ∪ silueta geométrica ---
-        var mask = CIImage.empty()
-        var hasMask = false
+        var mask: CIImage?
+        var personMaskImage: CIImage?
 
         if let personMask {
             var person = CIImage(cvPixelBuffer: personMask).oriented(forExifOrientation: exif)
             person = person.transformed(by: CGAffineTransform(translationX: -person.extent.origin.x,
                                                               y: -person.extent.origin.y))
-            let filled = aspectFill(person, into: rect)
-            // Suavizar el borde del modelo (viene duro a esta resolución).
-            mask = filled.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 1.6])
+            personMaskImage = aspectFill(person, into: rect)
+                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 1.5])
                 .cropped(to: rect)
-            hasMask = true
+            mask = personMaskImage
         }
 
         if let geometric = geometricMask(hands: hands, size: size) {
             let geometricImage = CIImage(cgImage: geometric)
                 .transformed(by: CGAffineTransform(scaleX: 1 / Self.maskScale,
                                                    y: 1 / Self.maskScale))
-                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 2.2])
+                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 2.0])
                 .cropped(to: rect)
 
-            if hasMask {
-                mask = mask.applyingFilter("CIMaximumComposition", parameters: [
+            if let current = mask {
+                mask = current.applyingFilter("CIMaximumComposition", parameters: [
                     kCIInputBackgroundImageKey: geometricImage
                 ])
             } else {
                 mask = geometricImage
-                hasMask = true
             }
         }
 
-        guard hasMask else { return nil }
+        guard var finalMask = mask else { return nil }
+
+        // --- Degradado alfa a lo largo del antebrazo (en Core Image) ---
+        if let hand = hands.first, let wristsMask = forearmFade(hand: hand, size: size) {
+            finalMask = finalMask.applyingFilter("CIMultiplyBlendMode", parameters: [
+                kCIInputBackgroundImageKey: wristsMask
+            ])
+        }
+
+        let solidMask = finalMask.cropped(to: rect)
 
         // --- Mano recortada, aclarada y semi-transparente ---
         let lifted = framed.applyingFilter("CIColorControls", parameters: [
@@ -301,8 +244,8 @@ final class HandGhostView: UIView {
             kCIInputSaturationKey: 1.0
         ])
 
-        // Alfa parcial multiplicando la máscara: evita problemas de premultiplicado.
-        let scaledMask = mask.applyingFilter("CIColorMatrix", parameters: [
+        // Alfa parcial horneado en la máscara (evita líos de premultiplicado).
+        let scaledMask = solidMask.applyingFilter("CIColorMatrix", parameters: [
             "inputRVector": CIVector(x: Self.handAlpha, y: 0, z: 0, w: 0),
             "inputGVector": CIVector(x: 0, y: Self.handAlpha, z: 0, w: 0),
             "inputBVector": CIVector(x: 0, y: 0, z: Self.handAlpha, w: 0),
@@ -315,29 +258,24 @@ final class HandGhostView: UIView {
             kCIInputBackgroundImageKey: clear
         ])
 
-        // --- Contorno blanco + halo ---
-        // Se calcula por morfología: (máscara dilatada − máscara) da una banda de ancho
-        // fijo pegada al borde de la silueta. Es determinista, no depende de la pendiente
-        // de la máscara (que era el fallo del intento con `CIEdges`: la máscara ya venía
-        // desenfocada, los bordes daban ~0 y el contorno quedaba invisible).
-        let dilated = mask.applyingFilter("CIMorphologyMaximum", parameters: [
+        // --- Contorno blanco + halo por morfología (dilatada − máscara) ---
+        let dilated = solidMask.applyingFilter("CIMorphologyMaximum", parameters: [
             kCIInputRadiusKey: Self.contourWidth
         ])
         let band = dilated
-            .applyingFilter("CISubtractBlendMode", parameters: [kCIInputBackgroundImageKey: mask])
+            .applyingFilter("CISubtractBlendMode", parameters: [kCIInputBackgroundImageKey: solidMask])
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: Self.contourBlurRadius])
             .applyingFilter("CIColorMatrix", parameters: [
                 "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
                 "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
                 "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputAVector": CIVector(x: Self.contourAlpha, y: 0, z: 0, w: 0),
+                "inputAVector": CIVector(x: 1, y: 0, z: 0, w: 0),
                 "inputBiasVector": CIVector(x: 1, y: 1, z: 1, w: 0)
             ])
             .cropped(to: rect)
 
         let composed = band.composited(over: handCut)
 
-        // --- Salida a media resolución ---
         let output = composed.transformed(by: CGAffineTransform(scaleX: Self.outputScale,
                                                                 y: Self.outputScale))
         let outputRect = CGRect(x: 0, y: 0,
@@ -346,7 +284,37 @@ final class HandGhostView: UIView {
         return context.createCGImage(output, from: outputRect)
     }
 
-    /// Recorte "aspect fill" igual que el preview de la cámara.
+    /// Gradiente axial blanco → negro a lo largo del antebrazo. Multiplicado por la
+    /// máscara deja la mano opaca y desvanece el brazo.
+    private func forearmFade(hand: HandPose, size: CGSize) -> CIImage? {
+        guard let wrist = hand.joints[.wrist] else { return nil }
+
+        let scale = min(max(hand.palmScale, 14), 340)
+        var dir = hand.forearm.direction2D
+        if !dir.x.isFinite || !dir.y.isFinite || (abs(dir.x) + abs(dir.y)) < 0.01 {
+            dir = CGPoint(x: 0, y: 1)
+        }
+        let armLength = max(hypot(hand.forearm.elbow2D.x - wrist.x,
+                                  hand.forearm.elbow2D.y - wrist.y), scale * 1.3)
+
+        let from = CGPoint(x: wrist.x - dir.x * (scale * 0.45),
+                           y: wrist.y - dir.y * (scale * 0.45))
+        let to = CGPoint(x: wrist.x + dir.x * (armLength * 0.95),
+                         y: wrist.y + dir.y * (armLength * 0.95))
+
+        // CIImage usa origen abajo-izquierda.
+        let p0 = CGPoint(x: from.x, y: size.height - from.y)
+        let p1 = CGPoint(x: to.x, y: size.height - to.y)
+
+        let filter = CIFilter(name: "CILinearGradient", parameters: [
+            "inputPoint0": CIVector(x: p0.x, y: p0.y),
+            "inputPoint1": CIVector(x: p1.x, y: p1.y),
+            "inputColor0": CIColor(red: 1, green: 1, blue: 1, alpha: 1),
+            "inputColor1": CIColor(red: 0, green: 0, blue: 0, alpha: 1)
+        ])
+        return filter?.outputImage?.cropped(to: CGRect(origin: .zero, size: size))
+    }
+
     private func aspectFill(_ image: CIImage, into rect: CGRect) -> CIImage {
         let imageWidth = image.extent.width
         let imageHeight = image.extent.height
@@ -361,7 +329,6 @@ final class HandGhostView: UIView {
             .cropped(to: rect)
     }
 
-    /// Silueta de respaldo a partir de los 21 puntos (para cuando Vision tarda o falla).
     private func geometricMask(hands: [HandPose], size: CGSize) -> CGImage? {
         guard !hands.isEmpty else { return nil }
 
@@ -382,7 +349,6 @@ final class HandGhostView: UIView {
         ctx.setFillColor(gray: 0, alpha: 1)
         ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
 
-        // UIKit tiene el origen arriba; el contexto lo tiene abajo.
         ctx.scaleBy(x: Self.maskScale, y: Self.maskScale)
         ctx.translateBy(x: 0, y: size.height)
         ctx.scaleBy(x: 1, y: -1)

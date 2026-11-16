@@ -98,6 +98,13 @@ final class XRSession: NSObject, ObservableObject {
     private var restoredMonitor = false
     private var didAutoOpenMonitor = false
 
+    // Diagnóstico en pantalla (temporal).
+    @Published var debugText = ""
+    private var startedAt: CFTimeInterval = 0
+    private var lastDebugAt: CFTimeInterval = 0
+    private var framesSinceDebug = 0
+    private var lastFPSAt: CFTimeInterval = 0
+
     // Predicción de movimiento (compensa la latencia de Vision entre frames).
     private var previousHands: [HandPose] = []
     private var previousHandsAt: CFTimeInterval = 0
@@ -225,6 +232,8 @@ final class XRSession: NSObject, ObservableObject {
     func start() {
         guard !isRunning else { return }
         isRunning = true
+        startedAt = CACurrentMediaTime()
+        lastDebugAt = startedAt
         localAddress = LocalIP.wifiAddress() ?? localAddress
         headTracker.start()
         startARKit()
@@ -559,14 +568,16 @@ final class XRSession: NSObject, ObservableObject {
 
         // El efecto "mano fantasma" sólo se ve sobre contenido virtual: sin nada detrás,
         // el recorte dibuja los mismos píxeles que ya muestra la cámara. Por eso al
-        // arrancar se abre el monitor (aunque el PC todavía no esté mandando imagen), que
-        // es lo que hace visible la mano igual que en la referencia.
-        if !didAutoOpenMonitor, case .normal = frame.camera.trackingState {
+        // arrancar se abre el monitor (aunque el PC todavía no esté mandando imagen).
+        // No se espera a `trackingState == .normal`: en poca luz tarda muchísimo.
+        if !didAutoOpenMonitor, CACurrentMediaTime() - startedAt > 0.6 {
             didAutoOpenMonitor = true
             if hostView.windows.isEmpty {
                 connectPC()
             }
         }
+
+        updateDebug(pose: pose, trackingState: frame.camera.trackingState)
 
         overlay.render(poses: predictedHands())
         hostView.layout(pose: pose)
@@ -660,8 +671,49 @@ final class XRSession: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Predicción de movimiento
+    // MARK: - Diagnóstico (temporal)
 
+    /// Muestra en pantalla el estado de cada eslabón del pipeline. Se refresca a 4 Hz
+    /// y no cuesta nada: es la forma de saber qué falla sin adivinar.
+    private func updateDebug(pose: CameraPose, trackingState: ARCamera.TrackingState) {
+        framesSinceDebug += 1
+        let now = CACurrentMediaTime()
+        guard now - lastDebugAt >= 0.25 else { return }
+
+        let elapsed = now - lastDebugAt
+        let fps = lastDebugAt > 0 ? Double(framesSinceDebug) / elapsed : 0
+        lastDebugAt = now
+        framesSinceDebug = 0
+
+        let tracking: String
+        switch trackingState {
+        case .normal: tracking = "normal"
+        case .limited(let reason):
+            switch reason {
+            case .initializing: tracking = "init"
+            case .excessiveMotion: tracking = "mov"
+            case .insufficientFeatures: tracking = "pocas"
+            case .relocalizing: tracking = "reloc"
+            @unknown default: tracking = "lim"
+            }
+        case .notAvailable: tracking = "no"
+        @unknown default: tracking = "?"
+        }
+
+        let depth = lastHands.first.map { String(format: "%.2fm", $0.depthMeters) } ?? "-"
+        let text = String(
+            format: "ARKit %@  %dfps\nmanos %d  %@  lidar %@\nmascara %@  seg %d\nfantasma %@  alpha %.2f",
+            tracking, Int(fps.rounded()),
+            lastHands.count, depth, lidarActive ? "si" : "no",
+            ghostView.hasMask ? "si" : "no", ghostView.segmentationCount,
+            ghostView.hasContent ? "si" : "no", 0.55
+        )
+
+        if debugText != text { debugText = text }
+        if startedAt == 0 { startedAt = now }
+    }
+
+    // MARK: - Predicción de movimiento
     /// Extrapola las articulaciones hacia "ahora" con la velocidad medida entre los
     /// dos últimos frames de Vision. Vision corre a 30 Hz y la pantalla a 60/120 Hz:
     /// sin esto la malla va un frame por detrás de la mano real.
