@@ -187,12 +187,12 @@ final class HandOverlayView: UIView {
         addCapsule(to: path, from: wrist, to: elbow,
                    rA: scale * 0.300, rB: scale * 0.330)
 
-        let hullNames: [VNHumanHandPoseObservation.JointName] = [
-            .wrist, .thumbCMC, .indexMCP, .middleMCP, .ringMCP, .littleMCP
-        ]
-        let hull = hullNames.compactMap { joints[$0] }
-        if hull.count >= 3 { addPolygon(to: path, points: hull) }
-
+        // Palma: el volumen lo hacen las cápsulas de abajo. El polígono relleno se quitó
+        // porque engordaba la mano y se comía los dedos (verificado con renders reales).
+        // Palma: las cápsulas hacen el volumen. Se usa 0.80 del radio para que la mano
+        // no se convierta en una masa que se come los dedos cuando están cerrados
+        // (verificado con renders reales: a 1.0 el puño quedaba como un bloque).
+        let palmScaleFactor: CGFloat = 0.80
         let palmBridges: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName, CGFloat)] = [
             (.indexMCP, .middleMCP, 0.170),
             (.middleMCP, .ringMCP, 0.170),
@@ -206,8 +206,8 @@ final class HandOverlayView: UIView {
         ]
         for (fromName, toName, radius) in palmBridges {
             guard let a = joints[fromName], let b = joints[toName] else { continue }
-            addCapsule(to: path, from: a, to: b,
-                       rA: scale * radius, rB: scale * radius * 0.94)
+            let scaled = scale * radius * palmScaleFactor
+            addCapsule(to: path, from: a, to: b, rA: scaled, rB: scaled * 0.94)
         }
 
         // Membranas interdigitales: rellenan los huecos entre los dedos, que es lo que
