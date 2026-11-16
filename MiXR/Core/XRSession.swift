@@ -96,6 +96,7 @@ final class XRSession: NSObject, ObservableObject {
     private var gamepadMoving = false
     private var mapLoaded = false
     private var restoredMonitor = false
+    private var didAutoOpenMonitor = false
 
     // Predicción de movimiento (compensa la latencia de Vision entre frames).
     private var previousHands: [HandPose] = []
@@ -554,6 +555,17 @@ final class XRSession: NSObject, ObservableObject {
         if mapLoaded, !restoredMonitor, case .normal = frame.camera.trackingState {
             restoredMonitor = true
             restoreSavedMonitor()
+        }
+
+        // El efecto "mano fantasma" sólo se ve sobre contenido virtual: sin nada detrás,
+        // el recorte dibuja los mismos píxeles que ya muestra la cámara. Por eso al
+        // arrancar se abre el monitor (aunque el PC todavía no esté mandando imagen), que
+        // es lo que hace visible la mano igual que en la referencia.
+        if !didAutoOpenMonitor, case .normal = frame.camera.trackingState {
+            didAutoOpenMonitor = true
+            if hostView.windows.isEmpty {
+                connectPC()
+            }
         }
 
         overlay.render(poses: predictedHands())

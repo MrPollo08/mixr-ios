@@ -21,8 +21,8 @@ final class HandGhostView: UIView {
 
     // MARK: - Ajustes visuales (calibrables contra la referencia)
 
-    /// Opacidad de la mano recortada. La referencia está en ~0.6.
-    private static let handAlpha: CGFloat = 0.62
+    /// Opacidad de la mano recortada. La referencia está en ~0.55.
+    private static let handAlpha: CGFloat = 0.55
     /// Cuánto se aclara la mano respecto de la imagen original.
     private static let brightnessLift: CGFloat = 0.14
     private static let contrastLift: CGFloat = 1.10
