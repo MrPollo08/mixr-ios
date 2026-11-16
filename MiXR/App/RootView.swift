@@ -73,6 +73,31 @@ struct RootView: View {
             .buttonStyle(.plain)
 
             if session.captureMode {
+                Button {
+                    if session.guidedText.isEmpty || session.guidedText.hasPrefix("Listo") {
+                        session.startGuidedCapture()
+                    } else {
+                        session.cancelGuidedCapture()
+                    }
+                } label: {
+                    Text(session.guidedText.isEmpty || session.guidedText.hasPrefix("Listo")
+                         ? "GRABAR TODOS (90 s)"
+                         : "Cancelar")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Capsule().fill(session.guidedText.hasPrefix("GRABANDO")
+                                                   ? Color.yellow : Color.white))
+                }
+                .buttonStyle(.plain)
+
+                if !session.guidedText.isEmpty {
+                    Text(session.guidedText)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(.yellow)
+                }
+
                 HStack(spacing: 8) {
                     Button {
                         session.toggleRecording()

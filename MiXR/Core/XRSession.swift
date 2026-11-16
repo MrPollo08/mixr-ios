@@ -96,6 +96,15 @@ final class XRSession: NSObject, ObservableObject {
     @Published var captureCountsText = ""
     @Published var showsCapturePanel = false
     @Published var captureURLText = ""
+    @Published var guidedText = ""
+
+    // Captura guiada: graba los 5 gestos seguidos, sin etiquetar a mano.
+    private var guidedActive = false
+    private var guidedIndex = 0
+    private var guidedRecording = false
+    private var guidedPhaseEndsAt: CFTimeInterval = 0
+    private let guidedPrepareSeconds: CFTimeInterval = 3.0
+    private let guidedRecordSeconds: CFTimeInterval = 15.0
 
     private var displayLink: CADisplayLink?
     private var isRunning = false
@@ -250,6 +259,78 @@ final class XRSession: NSObject, ObservableObject {
             captureURLText = "http://\(ip):47320/dataset.csv"
         } else {
             captureURLText = "sin Wi-Fi"
+        }
+    }
+
+    // MARK: - Captura guiada
+
+    /// Graba los 5 gestos seguidos: limpia el dataset, y por cada gesto hace una
+    /// cuenta atrás y graba 15 s automáticamente. Un solo toque.
+    func startGuidedCapture() {
+        guard captureMode else { return }
+        recorder.clearDataset()
+        recorder.stop()
+        guidedActive = true
+        guidedIndex = 0
+        guidedRecording = false
+        guidedPhaseEndsAt = CACurrentMediaTime() + guidedPrepareSeconds
+        recorder.setLabel(GestureLabel.allCases[0])
+        guidedText = "Preparate: \(GestureLabel.allCases[0].name.uppercased())"
+    }
+
+    func cancelGuidedCapture() {
+        guidedActive = false
+        guidedRecording = false
+        if recorder.isRecording { recorder.stop() }
+        guidedText = ""
+        refreshCaptureStatus()
+    }
+
+    private func updateGuidedCapture(now: CFTimeInterval) {
+        guard guidedActive else { return }
+        let all = GestureLabel.allCases
+        let remaining = guidedPhaseEndsAt - now
+
+        if guidedIndex >= all.count {
+            guidedActive = false
+            guidedRecording = false
+            if recorder.isRecording { recorder.stop() }
+            guidedText = "Listo: \(recorder.countsText)"
+            refreshCaptureStatus()
+            return
+        }
+
+        let current = all[guidedIndex]
+
+        if !guidedRecording {
+            if remaining <= 0 {
+                recorder.setLabel(current)
+                recorder.start()
+                guidedRecording = true
+                guidedPhaseEndsAt = now + guidedRecordSeconds
+                guidedText = "GRABANDO \(current.name.uppercased())  \(Int(guidedRecordSeconds))s"
+            } else {
+                guidedText = "Preparate: \(current.name.uppercased())  \(Int(ceil(remaining)))s"
+            }
+            return
+        }
+
+        if remaining <= 0 {
+            recorder.stop()
+            guidedRecording = false
+            guidedIndex += 1
+            if guidedIndex >= all.count {
+                guidedActive = false
+                guidedText = "Listo: \(recorder.countsText)"
+                refreshCaptureStatus()
+            } else {
+                let next = all[guidedIndex]
+                recorder.setLabel(next)
+                guidedPhaseEndsAt = now + guidedPrepareSeconds
+                guidedText = "Preparate: \(next.name.uppercased())  \(Int(ceil(guidedPrepareSeconds)))s"
+            }
+        } else {
+            guidedText = "GRABANDO \(current.name.uppercased())  \(Int(ceil(remaining)))s"
         }
     }
 
@@ -654,6 +735,7 @@ final class XRSession: NSObject, ObservableObject {
         }
 
         updateDebug(pose: pose, trackingState: frame.camera.trackingState)
+        updateGuidedCapture(now: CACurrentMediaTime())
 
         let displayHands = predictedHands()
         overlay.render(poses: displayHands)

@@ -126,6 +126,10 @@ final class GestureDatasetRecorder {
         label = all[index]
     }
 
+    func setLabel(_ newLabel: GestureLabel) {
+        label = newLabel
+    }
+
     func toggleRecording() {
         isRecording ? stop() : start()
     }
