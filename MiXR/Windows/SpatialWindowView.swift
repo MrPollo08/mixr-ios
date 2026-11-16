@@ -87,6 +87,11 @@ final class SpatialWindowView: UIView {
         card.layer.borderWidth = 1
         card.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
         card.clipsToBounds = true
+        // Sombra suave: da la sensación de que el panel flota en el aire, con volumen.
+        card.layer.shadowColor = UIColor.black.cgColor
+        card.layer.shadowOpacity = 0.45
+        card.layer.shadowRadius = 18
+        card.layer.shadowOffset = CGSize(width: 0, height: 10)
         addSubview(card)
 
         blur.frame = card.bounds

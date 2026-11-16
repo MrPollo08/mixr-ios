@@ -670,15 +670,15 @@ final class XRSession: NSObject, ObservableObject {
     }
 
     private func syncAnchors(dragging: Bool) {
-        for window in hostView.windows {
-            if window.anchor == nil { anchor(window) }
-            guard !dragging, let anchor = window.anchor else { continue }
-            let column = anchor.transform.columns.3
-            let target = simd_float3(column.x, column.y, column.z)
-            if simd_distance(target, window.position) > 0.004 {
-                window.position = target
-            }
+        // La posición de la ventana es la fuente de verdad: está en coordenadas del mundo
+        // de ARKit y la proyección la usa directamente. Antes se copiaba acá la posición
+        // del ARAnchor todos los frames y, cuando ARKit refinaba el mapa, la ventana se
+        // corría sola detrás de la cabeza. Ahora sólo se crea el ancla si falta (para que
+        // ARKit mantenga el mapa), pero nunca se escribe de vuelta.
+        for window in hostView.windows where window.anchor == nil {
+            anchor(window)
         }
+        _ = dragging
     }
 
     // MARK: - Loop principal
@@ -871,13 +871,18 @@ final class XRSession: NSObject, ObservableObject {
         }
 
         let depth = lastHands.first.map { String(format: "%.2fm", $0.depthMeters) } ?? "-"
+        let windowDepth: String = {
+            guard let window = hostView.windows.first,
+                  let projection = pose.project(window.position) else { return "-" }
+            return String(format: "%.2f", projection.depth)
+        }()
         let text = String(
-            format: "ARKit %@  %dfps  inf %d\nmanos %d  %@  %@\nmascara %@ %@ %.0f%%  seg %d\nfantasma %@  win %d  drag %@",
+            format: "ARKit %@  %dfps  inf %d\nmanos %d  %@  %@\nmascara %@ %@ %.0f%%  seg %d\nfantasma %@  win %d @%@m  drag %@",
             tracking, Int(fps.rounded()), lastInferenceWidth,
             lastHands.count, depth, gestures.recognizedGestureText,
             ghostView.hasMask ? "si" : "no", ghostView.maskSizeText,
             Double(ghostView.maskCoverage) * 100.0, ghostView.segmentationCount,
-            ghostView.hasContent ? "si" : "no", hostView.windows.count,
+            ghostView.hasContent ? "si" : "no", hostView.windows.count, windowDepth,
             gestures.isDragging ? "si" : "no"
         )
 

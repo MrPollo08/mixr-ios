@@ -238,24 +238,6 @@ final class WindowHostView: UIView {
             return
         }
 
-        // Modo "pegada": siempre delante, mismo tamaño, sin importar dónde estés.
-        if window.pinned {
-            let depth = max(window.pinnedDistance, 0.3)
-            let pointsPerMeter = ((pose.focalX + pose.focalY) / 2) / CGFloat(depth)
-            window.pointsPerMeter = pointsPerMeter
-            window.view.isHidden = false
-            window.view.bounds = CGRect(origin: .zero, size: window.view.baseSize)
-            window.view.center = CGPoint(x: pose.viewport.width / 2,
-                                         y: pose.viewport.height / 2)
-
-            let targetWidth = window.physicalWidth * pointsPerMeter
-            let scale = targetWidth / window.view.baseSize.width
-        window.view.transform = .identity
-        window.view.layer.transform = panelTransform(window: window, pose: pose, scale: scale)
-            window.view.alpha = 1
-            return
-        }
-
         guard let projection = pose.project(window.position) else {
             window.view.isHidden = true
             return
@@ -324,7 +306,10 @@ final class WindowHostView: UIView {
         let pitch = atan2(CGFloat(localY), CGFloat(hypot(localX, localZ)))
 
         var transform = CATransform3DIdentity
-        transform.m34 = -1.0 / 1400.0
+        // Perspectiva físicamente correcta: la fuerza de la fuga es 1 / distancia focal
+        // (en puntos). Antes era una constante inventada, por eso el panel se veía plano.
+        let focal = CGFloat(max((pose.focalX + pose.focalY) * 0.5, 200))
+        transform.m34 = -1.0 / focal
         transform = CATransform3DRotate(transform, -yaw, 0, 1, 0)
         transform = CATransform3DRotate(transform, pitch, 1, 0, 0)
         transform = CATransform3DScale(transform, scale, scale, 1)

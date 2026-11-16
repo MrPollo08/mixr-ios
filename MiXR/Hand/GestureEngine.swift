@@ -231,9 +231,10 @@ final class GestureEngine {
         dragPointsPerMeter = window.pointsPerMeter > 1 ? window.pointsPerMeter : 600
 
         dragStartHandWorld = hand.pinchWorld3D
-        dragHas3D = simd_length(hand.pinchWorld3D) > 0.0001
-            && hand.jointsWorld3D[.thumbTip] != nil
-            && hand.jointsWorld3D[.indexTip] != nil
+        // El arrastre 3D dependía de la profundidad LiDAR de la pinza, que oscila y hacía
+        // que la ventana se fuera "a cualquier lado". Se usa el camino 2D con la base de
+        // cámara congelada: es rígido, 1:1 con el dedo y no puede dispararse.
+        dragHas3D = false
 
         dragFilter.reset()
         pressCandidate = nil
