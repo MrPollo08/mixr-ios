@@ -32,8 +32,8 @@ final class XRSession: NSObject, ObservableObject {
     @Published var mouseEnabled = false
     /// 2 = imagen completa de la cámara: nada recortado, ideal para el tracking de manos.
     @Published var framing = 2
-    /// Autofoco continuo (true) o enfoque bloqueado (false, lo que evita el desenfoque).
-    @Published var autofocusEnabled = false
+    /// Autofoco continuo (true) o enfoque bloqueado (false).
+    @Published var autofocusEnabled = true
     /// Mano fantasma (segmentación) en vez de la malla sintética.
     @Published var ghostHandEnabled = true
 
@@ -109,6 +109,10 @@ final class XRSession: NSObject, ObservableObject {
     private var ghostMissCount = 0
     private var autoMeshFallback = false
 
+    // Enfoque: trabajo pendiente del bloqueo automático.
+    private var focusLockWork: DispatchWorkItem?
+    private var autoFocusLockScheduled = false
+
     lazy var containerView: UIView = {
         let view = UIView(frame: .zero)
         view.backgroundColor = .black
@@ -164,7 +168,7 @@ final class XRSession: NSObject, ObservableObject {
     }()
 
     @objc private func handleDoubleTap() {
-        toggleAutofocus()
+        refocusNow()
     }
 
     @objc private func handleTripleTap() {
@@ -296,12 +300,52 @@ final class XRSession: NSObject, ObservableObject {
         }
     }
 
-    /// Cambia entre autofoco continuo y enfoque bloqueado. Al bloquear se reinicia la
-    /// sesión para que el foco quede fijado en la distancia a la que está tu mano ahora.
+    /// Cambia entre autofoco continuo y enfoque bloqueado.
     func toggleAutofocus() {
         autofocusEnabled.toggle()
         startARKit(forceReset: false)
         status = autofocusEnabled ? "Autofoco continuo" : "Enfoque bloqueado"
+    }
+
+    // MARK: - Enfoque: "enfocar y congelar"
+
+    /// El truco para una mano nítida: se deja el autofoco **encendido** el tiempo
+    /// suficiente para que la lente se vaya a la distancia de la mano, y recién ahí se
+    /// apaga. `isAutoFocusEnabled = false` congela la lente donde está: sin caza, pero
+    /// enfocada en tu mano en vez de en el fondo.
+    ///
+    /// Con `delay` en 0 el foco se congela de inmediato (queda donde esté).
+    func lockFocus(after delay: TimeInterval) {
+        focusLockWork?.cancel()
+
+        if delay <= 0 {
+            autofocusEnabled = false
+            startARKit(forceReset: false)
+            status = "Enfoque fijado"
+            return
+        }
+
+        // 1) Autofoco encendido: que busque el sujeto cercano.
+        if !autofocusEnabled {
+            autofocusEnabled = true
+            startARKit(forceReset: false)
+        }
+
+        // 2) Pasado el tiempo, congelar.
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.autofocusEnabled else { return }
+            self.autofocusEnabled = false
+            self.startARKit(forceReset: false)
+            self.status = "Enfoque fijado"
+        }
+        focusLockWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Vuelve a enfocar sobre lo que hay delante ahora (doble toque).
+    func refocusNow() {
+        lockFocus(after: 0.85)
+        status = "Enfocando…"
     }
 
     // MARK: - Eventos de gestos
@@ -557,6 +601,12 @@ final class XRSession: NSObject, ObservableObject {
 
         lastHands = poses
         if handCount != poses.count { handCount = poses.count }
+
+        // Primera vez que aparece la mano: dejar que el autofoco la encuentre y congelarlo.
+        if !poses.isEmpty, !autoFocusLockScheduled {
+            autoFocusLockScheduled = true
+            lockFocus(after: 0.75)
+        }
 
         if let first = poses.first {
             let tag = first.hasLiDAR ? "LiDAR" : "3D"
