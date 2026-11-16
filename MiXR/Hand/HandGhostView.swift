@@ -21,13 +21,16 @@ final class HandGhostView: UIView {
 
     // MARK: - Ajustes visuales (calibrables contra la referencia)
 
-    /// Opacidad de la mano recortada.
-    static let handAlpha: CGFloat = 0.55
-    private static let brightnessLift: CGFloat = 0.14
-    private static let contrastLift: CGFloat = 1.10
-    /// Ancho del contorno blanco (en puntos) y difusión del halo.
-    private static let contourWidth: CGFloat = 2.6
-    private static let contourBlurRadius: CGFloat = 1.5
+    /// La mano se pinta como **material claro translúcido**, no con los píxeles de la
+    /// cámara: al superponer la misma mano oscura sobre sí misma se reforzaba el negro
+    /// y quedaba un bloque sólido.
+    private static let fillStrength: CGFloat = 0.72
+    /// Opacidad final del recorte.
+    private static let handAlpha: CGFloat = 0.82
+    /// Contorno fino y suave (antes era grueso y duro).
+    private static let contourWidth: CGFloat = 1.9
+    private static let contourBlurRadius: CGFloat = 2.0
+    private static let contourAlpha: CGFloat = 0.9
 
     private static let outputScale: CGFloat = 0.5
     private static let maskScale: CGFloat = 0.45
@@ -247,11 +250,14 @@ final class HandGhostView: UIView {
 
         let solidMask = finalMask.cropped(to: rect)
 
-        // --- Mano recortada, aclarada y semi-transparente ---
-        let lifted = framed.applyingFilter("CIColorControls", parameters: [
-            kCIInputBrightnessKey: Self.brightnessLift,
-            kCIInputContrastKey: Self.contrastLift,
-            kCIInputSaturationKey: 1.0
+        // --- Mano: material claro translúcido sobre la imagen (no los píxeles crudos) ---
+        // El color claro se mezcla con la imagen original al `fillStrength`: queda un
+        // gris muy claro que deja intuir la forma real, como en la referencia.
+        let light = CIImage(color: CIColor(red: 0.90, green: 0.92, blue: 0.96,
+                                           alpha: Self.fillStrength))
+            .cropped(to: rect)
+        let handFill = light.applyingFilter("CISourceOverCompositing", parameters: [
+            kCIInputBackgroundImageKey: framed
         ])
 
         // Alfa parcial horneado en la máscara (evita líos de premultiplicado).
@@ -263,7 +269,7 @@ final class HandGhostView: UIView {
         ])
 
         let clear = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: rect)
-        let handCut = lifted.applyingFilter("CIBlendWithMask", parameters: [
+        let handCut = handFill.applyingFilter("CIBlendWithMask", parameters: [
             kCIInputMaskImageKey: scaledMask,
             kCIInputBackgroundImageKey: clear
         ])
