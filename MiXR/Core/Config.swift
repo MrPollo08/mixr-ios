@@ -1,4 +1,4 @@
-import Foundation
+﻿import Foundation
 import CoreGraphics
 
 /// Constantes de la app. Todo en metros (mundo real) salvo lo que dice "pt".
@@ -35,7 +35,7 @@ enum Config {
     static let maxDepth: Float = 9.0
 
     /// Cada cuánto se procesa un frame para las manos.
-    static let handTrackingInterval: TimeInterval = 1.0 / 30.0
+    static let handTrackingInterval: TimeInterval = 1.0 / 60.0
 
     /// Puerto TCP donde el iPhone escucha el video del PC.
     static let streamPort: UInt16 = 47295

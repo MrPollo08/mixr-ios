@@ -1,4 +1,4 @@
-import CoreImage
+﻿import CoreImage
 import CoreVideo
 import Metal
 import QuartzCore
@@ -31,8 +31,8 @@ final class HandGhostView: UIView {
 
     private static let outputScale: CGFloat = 0.5
     private static let maskScale: CGFloat = 0.45
-    private static let maxSegmentationRate: CFTimeInterval = 0.055
-    private static let maxRenderRate: CFTimeInterval = 1.0 / 30.0
+    private static let maxSegmentationRate: CFTimeInterval = 1.0 / 30.0
+    private static let maxRenderRate: CFTimeInterval = 1.0 / 60.0
 
     private let imageLayer = CALayer()
     private let context: CIContext?
@@ -93,13 +93,16 @@ final class HandGhostView: UIView {
 
     func update(buffer: CVPixelBuffer?,
                 hands: [HandPose],
-                orientation: UIInterfaceOrientation) {
+                orientation: UIInterfaceOrientation,
+                segmentationBuffer: CVPixelBuffer? = nil) {
         self.buffer = buffer
         self.hands = hands
         self.orientation = orientation
 
-        if let buffer {
-            requestSegmentationIfNeeded(buffer)
+        // La segmentación usa la imagen reducida (4x menos píxeles) pero el color que
+        // se compone es el frame completo, así la mano no pierde nitidez.
+        if let source = segmentationBuffer ?? buffer {
+            requestSegmentationIfNeeded(source)
         } else {
             personMask = nil
         }

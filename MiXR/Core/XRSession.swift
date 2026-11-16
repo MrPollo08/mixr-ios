@@ -81,6 +81,7 @@ final class XRSession: NSObject, ObservableObject {
     private let arSession = ARSession()
     private let headTracker = HybridHeadTracker()
     private let tracker = HandTracker()
+    private let downscaler = FrameDownscaler()
     private let gestures = GestureEngine()
     private let pointer = PointerController()
     private let input = InputClient()
@@ -104,6 +105,7 @@ final class XRSession: NSObject, ObservableObject {
     private var lastDebugAt: CFTimeInterval = 0
     private var framesSinceDebug = 0
     private var lastFPSAt: CFTimeInterval = 0
+    private var lastInferenceWidth = 0
 
     // Predicción de movimiento (compensa la latencia de Vision entre frames).
     private var previousHands: [HandPose] = []
@@ -555,6 +557,11 @@ final class XRSession: NSObject, ObservableObject {
         backdrop.enqueue(frame.capturedImage)
         lastBuffer = frame.capturedImage
 
+        // Frame reducido (640 px) para los modelos: 4-9x menos píxeles que el original.
+        // El color que se muestra sigue usando el frame completo.
+        let inferenceBuffer = downscaler.downscale(frame.capturedImage) ?? frame.capturedImage
+        lastInferenceWidth = CVPixelBufferGetWidth(inferenceBuffer)
+
         let pose = headTracker.fusedPose(from: frame,
                                          orientation: orientation,
                                          viewport: rect.size,
@@ -583,10 +590,11 @@ final class XRSession: NSObject, ObservableObject {
         hostView.layout(pose: pose)
 
         // Mano fantasma: se alimenta con el frame *actual* de la cámara (60 Hz) y ella
-        // misma limita la segmentación (~18 Hz). Así el recorte va pegado al video.
+        // misma limita la segmentación (~30 Hz). Así el recorte va pegado al video.
         ghostView.update(buffer: frame.capturedImage,
                          hands: lastHands,
-                         orientation: orientation)
+                         orientation: orientation,
+                         segmentationBuffer: inferenceBuffer)
         updateGhostFallback()
 
         if stereoEnabled {
@@ -596,7 +604,7 @@ final class XRSession: NSObject, ObservableObject {
 
         let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth
 
-        tracker.submit(pixelBuffer: frame.capturedImage,
+        tracker.submit(pixelBuffer: inferenceBuffer,
                        depthMap: depthData?.depthMap,
                        confidenceMap: depthData?.confidenceMap,
                        pose: pose,
@@ -702,11 +710,11 @@ final class XRSession: NSObject, ObservableObject {
 
         let depth = lastHands.first.map { String(format: "%.2fm", $0.depthMeters) } ?? "-"
         let text = String(
-            format: "ARKit %@  %dfps\nmanos %d  %@  lidar %@\nmascara %@  seg %d\nfantasma %@  alpha %.2f",
-            tracking, Int(fps.rounded()),
+            format: "ARKit %@  %dfps  inf %d\nmanos %d  %@  lidar %@\nmascara %@  seg %d\nfantasma %@  win %d",
+            tracking, Int(fps.rounded()), lastInferenceWidth,
             lastHands.count, depth, lidarActive ? "si" : "no",
             ghostView.hasMask ? "si" : "no", ghostView.segmentationCount,
-            ghostView.hasContent ? "si" : "no", 0.55
+            ghostView.hasContent ? "si" : "no", hostView.windows.count
         )
 
         if debugText != text { debugText = text }

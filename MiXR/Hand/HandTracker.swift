@@ -229,9 +229,12 @@ final class HandTracker {
     ]
 
     private let queue = DispatchQueue(label: "mixr.hand-tracker", qos: .userInteractive)
+    /// Cola aparte para el cuerpo: es lo más caro y **no debe bloquear** la mano.
+    private let bodyQueue = DispatchQueue(label: "mixr.body-tracker", qos: .utility)
     private let handRequest = VNDetectHumanHandPoseRequest()
     private let bodyRequest = VNDetectHumanBodyPoseRequest()
-    private let sequence = VNSequenceRequestHandler()
+    private let handSequence = VNSequenceRequestHandler()
+    private let bodySequence = VNSequenceRequestHandler()
 
     private var filters2D: [String: [VNHumanHandPoseObservation.JointName: OneEuroFilter2D]] = [:]
     private var filters3D: [String: [VNHumanHandPoseObservation.JointName: OneEuroFilter3D]] = [:]
@@ -249,8 +252,9 @@ final class HandTracker {
     private var palmCalibration: [String: Float] = [:]
     private var palmCalibrationSamples: [String: Int] = [:]
 
-    /// Cadencia de Vision (~30 Hz). El cuerpo va más lento porque es caro.
+    /// Cadencia de Vision. El cuerpo va en su propia cola y a ~3 Hz.
     var interval: TimeInterval = Config.handTrackingInterval
+    private var bodyBusy = false
     private var busy = false
 
     init() {
@@ -267,8 +271,39 @@ final class HandTracker {
                 imageAspect: CGFloat,
                 orientation: CGImagePropertyOrientation,
                 completion: @escaping ([HandPose]) -> Void) {
+        // Cuerpo (codo/brazo) en su propia cola, a ~3 Hz, sin frenar la mano.
+        if !bodyBusy, CACurrentMediaTime() - lastBodyAt > 0.33 {
+            bodyBusy = true
+            lastBodyAt = CACurrentMediaTime()
+            bodyQueue.async { [weak self] in
+                guard let self else { return }
+                defer { DispatchQueue.main.async { self.bodyBusy = false } }
+                let projector = ImageProjector(viewportSize: viewportSize, imageAspect: imageAspect)
+                do {
+                    try self.bodySequence.perform([self.bodyRequest],
+                                                  on: pixelBuffer,
+                                                  orientation: orientation)
+                    if let body = self.bodyRequest.results?.first,
+                       let pts = try? body.recognizedPoints(.all) {
+                        let elbows = Self.collect([.leftElbow, .rightElbow], from: pts, projector: projector)
+                        let wrists = Self.collect([.leftWrist, .rightWrist], from: pts, projector: projector)
+                        DispatchQueue.main.async {
+                            self.cachedElbows = elbows
+                            self.cachedWrists = wrists
+                        }
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        self.cachedElbows = []
+                        self.cachedWrists = []
+                    }
+                }
+            }
+        }
+
         queue.async { [weak self] in
             guard let self else { return }
+            // Frame dropeado: si el modelo anterior no terminó, se descarta este.
             guard !self.busy else { return }
 
             let now = CACurrentMediaTime()
@@ -317,24 +352,8 @@ final class HandTracker {
                         timestamp: CFTimeInterval) -> [HandPose] {
         let projector = ImageProjector(viewportSize: viewportSize, imageAspect: imageAspect)
 
-        // --- Arm Tracking: cuerpo a ~9 Hz ---
-        if timestamp - lastBodyAt > 0.11 {
-            lastBodyAt = timestamp
-            do {
-                try sequence.perform([bodyRequest], on: pixelBuffer, orientation: orientation)
-                if let body = bodyRequest.results?.first,
-                   let pts = try? body.recognizedPoints(.all) {
-                    cachedElbows = Self.collect([.leftElbow, .rightElbow], from: pts, projector: projector)
-                    cachedWrists = Self.collect([.leftWrist, .rightWrist], from: pts, projector: projector)
-                }
-            } catch {
-                cachedElbows = []
-                cachedWrists = []
-            }
-        }
-
         do {
-            try sequence.perform([handRequest], on: pixelBuffer, orientation: orientation)
+            try handSequence.perform([handRequest], on: pixelBuffer, orientation: orientation)
         } catch {
             return persistedPoses(seen: [], timestamp: timestamp)
         }
@@ -795,7 +814,7 @@ final class HandTracker {
                                value: CGPoint,
                                timestamp: CFTimeInterval) -> CGPoint {
         var bank = filters2D[key] ?? [:]
-        var filter = bank[name] ?? OneEuroFilter2D(minCutoff: 1.60, beta: 0.024, dCutoff: 1.0)
+        var filter = bank[name] ?? OneEuroFilter2D(minCutoff: 3.20, beta: 0.055, dCutoff: 1.0)
         let result = filter.filter(value, timestamp: timestamp)
         bank[name] = filter
         filters2D[key] = bank
@@ -807,8 +826,8 @@ final class HandTracker {
                                value: simd_float3,
                                timestamp: CFTimeInterval) -> simd_float3 {
         var bank = filters3D[key] ?? [:]
-        var filter = bank[name] ?? OneEuroFilter3D(minCutoffXY: 1.65, betaXY: 2.10,
-                                                   minCutoffZ: 1.20, betaZ: 1.50,
+        var filter = bank[name] ?? OneEuroFilter3D(minCutoffXY: 3.00, betaXY: 3.20,
+                                                   minCutoffZ: 2.00, betaZ: 2.40,
                                                    dCutoff: 1.0)
         let result = filter.filter(value, timestamp: timestamp)
         bank[name] = filter
@@ -817,14 +836,14 @@ final class HandTracker {
     }
 
     private func filterDepth1D(key: String, value: Float, timestamp: CFTimeInterval) -> Float {
-        var filter = depthFilters[key] ?? OneEuroFilter1D(minCutoff: 1.20, beta: 1.40, dCutoff: 1.0)
+        var filter = depthFilters[key] ?? OneEuroFilter1D(minCutoff: 2.20, beta: 2.20, dCutoff: 1.0)
         let result = filter.filter(value, timestamp: timestamp)
         depthFilters[key] = filter
         return result
     }
 
     private func filterArmPoint(key: String, value: CGPoint, timestamp: CFTimeInterval) -> CGPoint {
-        var filter = armFilters[key] ?? OneEuroFilter2D(minCutoff: 1.05, beta: 0.012, dCutoff: 1.0)
+        var filter = armFilters[key] ?? OneEuroFilter2D(minCutoff: 2.20, beta: 0.040, dCutoff: 1.0)
         let result = filter.filter(value, timestamp: timestamp)
         armFilters[key] = filter
         return result

@@ -1,4 +1,4 @@
-import UIKit
+﻿import UIKit
 import simd
 
 /// Contenido desplazable (scroll con la pinza mantenida).
@@ -284,7 +284,8 @@ final class WindowHostView: UIView {
         window.view.bounds = CGRect(origin: .zero, size: window.view.baseSize)
         let previous = window.smoothedCenter ?? center
         // Tracking limitado (poca luz/textura): más calma, menos temblor.
-        let smoothing: CGFloat = pose.trackingLimited ? 0.14 : 0.35
+        // Factor alto = el panel sigue al mundo casi sin retraso (antes 0.35 se notaba como lag).
+        let smoothing: CGFloat = pose.trackingLimited ? 0.45 : 0.72
         let smoothed = CGPoint(x: previous.x + (center.x - previous.x) * smoothing,
                                y: previous.y + (center.y - previous.y) * smoothing)
         window.smoothedCenter = smoothed
