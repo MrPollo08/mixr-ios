@@ -38,7 +38,7 @@ final class HandOverlayView: UIView {
             // Trazo grueso: la mitad interior la tapa el relleno opaco.
             outlineLayer.fillColor = UIColor.clear.cgColor
             outlineLayer.strokeColor = UIColor(white: 0.965, alpha: 1.0).cgColor
-            outlineLayer.lineWidth = 4.0
+            outlineLayer.lineWidth = 3.2
             outlineLayer.lineJoin = .round
             outlineLayer.lineCap = .round
             outlineLayer.fillRule = .nonZero
@@ -48,7 +48,7 @@ final class HandOverlayView: UIView {
             outlineLayer.shadowRadius = 3.0
             outlineLayer.shadowOffset = .zero
 
-            baseFillLayer.fillColor = UIColor(red: 0.115, green: 0.120, blue: 0.130, alpha: 1.0).cgColor
+            baseFillLayer.fillColor = UIColor(red: 0.17, green: 0.17, blue: 0.20, alpha: 1.0).cgColor
             baseFillLayer.strokeColor = nil
             baseFillLayer.fillRule = .nonZero
 
@@ -270,7 +270,7 @@ final class HandOverlayView: UIView {
 
         // Grosor del contorno según profundidad real (más cerca = algo más marcado).
         let depthFactor = CGFloat(min(max(0.62 / max(CGFloat(pose.depthMeters), 0.12), 0.80), 1.60))
-        group.outlineLayer.lineWidth = 3.6 * depthFactor
+        group.outlineLayer.lineWidth = 3.2 * depthFactor
 
         // Sombra de contacto desplazada (apoya la mano sobre el escenario).
         let shadowPath = CGMutablePath()
