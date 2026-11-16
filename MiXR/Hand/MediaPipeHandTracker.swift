@@ -74,7 +74,7 @@ final class MediaPipeHandTracker {
         default: uiOrientation = .up
         }
 
-        guard let image = try? MPPImage(pixelBuffer: pixelBuffer, orientation: uiOrientation) else {
+        guard let image = try? MPImage(pixelBuffer: pixelBuffer, orientation: uiOrientation) else {
             return nil
         }
         guard let result = try? landmarker.detect(videoFrame: image,
