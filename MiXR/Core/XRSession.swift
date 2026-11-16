@@ -32,6 +32,8 @@ final class XRSession: NSObject, ObservableObject {
     @Published var mouseEnabled = false
     /// 2 = imagen completa de la cámara: nada recortado, ideal para el tracking de manos.
     @Published var framing = 2
+    /// Autofoco continuo (true) o enfoque bloqueado (false, lo que evita el desenfoque).
+    @Published var autofocusEnabled = false
 
     var framingName: String {
         switch framing {
@@ -138,13 +140,25 @@ final class XRSession: NSObject, ObservableObject {
         leftPane.host.session = self
         rightPane.host.session = self
 
+        // Doble toque en cualquier parte: alterna autofoco / enfoque bloqueado.
+        // (No hay interfaz visible, así que este es el control de cámara.)
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap))
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.cancelsTouchesInView = false
+        view.addGestureRecognizer(doubleTap)
+
         return view
     }()
+
+    @objc private func handleDoubleTap() {
+        toggleAutofocus()
+    }
 
     override init() {
         super.init()
         gamepad.onPrimary = { [weak self] in self?.connectPC() }
         gamepad.onSecondary = { [weak self] in self?.centerWindows() }
+        gamepad.onTertiary = { [weak self] in self?.toggleAutofocus() }
         gestures.onEvent = { [weak self] event in self?.handle(event) }
         loadVRSettings()
     }
@@ -175,7 +189,7 @@ final class XRSession: NSObject, ObservableObject {
         occlusionView.clear()
     }
 
-    private func startARKit() {
+    private func startARKit(forceReset: Bool = false) {
         guard ARWorldTrackingConfiguration.isSupported else {
             status = "Este iPhone no soporta ARKit"
             return
@@ -186,6 +200,15 @@ final class XRSession: NSObject, ObservableObject {
         configuration.planeDetection = [.horizontal, .vertical]
         configuration.isLightEstimationEnabled = false
         configuration.environmentTexturing = .none
+
+        // Enfoque: por defecto se BLOQUEA el autofoco continuo. Así la cámara deja de
+        // "cazar" entre la mano (cerca) y el monitor (lejos), que es lo que producía
+        // los parpadeos de desenfoque. Al bloquear, ARKit enfoca una vez y mantiene.
+        configuration.isAutoFocusEnabled = autofocusEnabled
+
+        if let format = Self.preferredVideoFormat() {
+            configuration.videoFormat = format
+        }
 
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
             configuration.frameSemantics.insert(.smoothedSceneDepth)
@@ -202,9 +225,31 @@ final class XRSession: NSObject, ObservableObject {
             mapLoaded = true
         }
 
-        arSession.run(configuration,
-                      options: arStarted ? [] : [.resetTracking, .removeExistingAnchors])
+        let reset = forceReset || !arStarted
+        arSession.run(configuration, options: reset ? [.resetTracking, .removeExistingAnchors] : [])
         arStarted = true
+    }
+
+    /// Formato de vídeo: se prefiere 30 fps (mejor en poca luz y menos ruido) con la
+    /// resolución más alta que ARKit ofrezca para ese frame rate.
+    private static func preferredVideoFormat() -> ARConfiguration.VideoFormat? {
+        let formats = ARWorldTrackingConfiguration.supportedVideoFormats
+        guard !formats.isEmpty else { return nil }
+
+        let candidates = formats.filter { $0.framesPerSecond == 30 }
+        let pool = candidates.isEmpty ? formats : candidates
+        return pool.max { a, b in
+            (a.imageResolution.width * a.imageResolution.height)
+                < (b.imageResolution.width * b.imageResolution.height)
+        }
+    }
+
+    /// Cambia entre autofoco continuo y enfoque bloqueado. Al bloquear se reinicia la
+    /// sesión para que el foco quede fijado en la distancia a la que está tu mano ahora.
+    func toggleAutofocus() {
+        autofocusEnabled.toggle()
+        startARKit(forceReset: false)
+        status = autofocusEnabled ? "Autofoco continuo" : "Enfoque bloqueado"
     }
 
     // MARK: - Eventos de gestos

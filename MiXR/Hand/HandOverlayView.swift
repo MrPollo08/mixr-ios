@@ -3,101 +3,137 @@ import UIKit
 import Vision
 import simd
 
-/// Capa de renderizado Overlay (`zPosition = 1000`): **malla de mano + antebrazo**.
+/// Capa de renderizado Overlay (`zPosition = 1000`): **malla de mano + antebrazo con volumen**.
 ///
-/// El dibujo es un **Ãºnico contorno cerrado** (perÃ­metro real de la silueta), tal como
-/// en la referencia: relleno translÃºcido oscuro, lÃ­nea fina clara por fuera, muescas
-/// en V entre los dedos y continuidad hacia el antebrazo que se desvanece en el brazo.
+/// La silueta se compone como **unión de formas** (19 huesos, palma y antebrazo) y se
+/// pinta en varias pasadas para que se lea como un cuerpo 3D y no como un dibujo de líneas:
 ///
-/// Al ser un solo polÃ­gono no hay lÃ­neas internas, ni parches de distinta opacidad,
-/// ni costuras entre falanges: el relleno es uniforme y el borde, continuo.
+/// 1. `outlineLayer` — el path con un trazo **grueso y claro** + halo suave.
+/// 2. `baseFillLayer` — el mismo path **relleno oscuro opaco**: tapa la mitad interior
+///    del trazo, así queda **una sola línea continua alrededor de la silueta**.
+/// 3. `shadeLayer` — degradado axial (luz arriba-izquierda → sombra abajo-derecha)
+///    recortado a la silueta: da forma y curvatura.
+/// 4. `highlightLayer` — degradado radial suave sobre la palma: volumen.
+///
+/// Los degradados son GPU (`CAGradientLayer` con máscara de path), así que no cuesta FPS.
 final class HandOverlayView: UIView {
 
     private final class HandMeshGroup {
         let container = CALayer()
         let wristMask = CAGradientLayer()
 
-        /// Relleno translÃºcido de toda la silueta.
-        let fillLayer = CAShapeLayer()
-        /// LÃ­nea fina exterior (contorno).
-        let outlineLayer = CAShapeLayer()
-        /// Sombra suave: da profundidad (la mano "flota" sobre el escenario).
         let shadowLayer = CAShapeLayer()
+        let outlineLayer = CAShapeLayer()
+        let baseFillLayer = CAShapeLayer()
+
+        let shadeLayer = CAGradientLayer()
+        let shadeMask = CAShapeLayer()
+
+        let highlightLayer = CAGradientLayer()
+        let highlightMask = CAShapeLayer()
 
         init() {
-            container.opacity = 0.94
+            container.opacity = 0.90
 
-            shadowLayer.fillColor = UIColor.black.withAlphaComponent(0.30).cgColor
-            shadowLayer.strokeColor = nil
-
-            fillLayer.fillColor = UIColor(white: 0.115, alpha: 0.58).cgColor
-            fillLayer.strokeColor = nil
-            fillLayer.fillRule = .nonZero
-
+            // Trazo grueso: la mitad interior la tapa el relleno opaco.
             outlineLayer.fillColor = UIColor.clear.cgColor
-            outlineLayer.strokeColor = UIColor(white: 0.93, alpha: 0.92).cgColor
-            outlineLayer.lineWidth = 1.7
+            outlineLayer.strokeColor = UIColor(white: 0.965, alpha: 1.0).cgColor
+            outlineLayer.lineWidth = 4.0
             outlineLayer.lineJoin = .round
             outlineLayer.lineCap = .round
             outlineLayer.fillRule = .nonZero
+            // Halo suave alrededor del contorno.
+            outlineLayer.shadowColor = UIColor(white: 1.0, alpha: 1.0).cgColor
+            outlineLayer.shadowOpacity = 0.35
+            outlineLayer.shadowRadius = 3.0
+            outlineLayer.shadowOffset = .zero
+
+            baseFillLayer.fillColor = UIColor(red: 0.115, green: 0.120, blue: 0.130, alpha: 1.0).cgColor
+            baseFillLayer.strokeColor = nil
+            baseFillLayer.fillRule = .nonZero
+
+            shadeLayer.type = .axial
+            shadeLayer.colors = [
+                UIColor(white: 1.0, alpha: 0.16).cgColor,
+                UIColor(white: 0.55, alpha: 0.02).cgColor,
+                UIColor(white: 0.0, alpha: 0.34).cgColor
+            ]
+            shadeLayer.locations = [0.0, 0.42, 1.0]
+            shadeLayer.startPoint = CGPoint(x: 0.28, y: 0.02)
+            shadeLayer.endPoint = CGPoint(x: 0.78, y: 1.0)
+            shadeMask.fillColor = UIColor.white.cgColor
+            shadeMask.fillRule = .nonZero
+            shadeLayer.mask = shadeMask
+
+            highlightLayer.type = .radial
+            highlightLayer.colors = [
+                UIColor(white: 1.0, alpha: 0.14).cgColor,
+                UIColor(white: 1.0, alpha: 0.04).cgColor,
+                UIColor(white: 1.0, alpha: 0.0).cgColor
+            ]
+            highlightLayer.locations = [0.0, 0.45, 1.0]
+            highlightLayer.startPoint = CGPoint(x: 0.45, y: 0.30)
+            highlightLayer.endPoint = CGPoint(x: 1.15, y: 1.15)
+            highlightMask.fillColor = UIColor.white.cgColor
+            highlightMask.fillRule = .nonZero
+            highlightLayer.mask = highlightMask
+
+            shadowLayer.fillColor = UIColor.black.withAlphaComponent(0.30).cgColor
+            shadowLayer.strokeColor = nil
+            shadowLayer.fillRule = .nonZero
 
             container.addSublayer(shadowLayer)
-            container.addSublayer(fillLayer)
             container.addSublayer(outlineLayer)
+            container.addSublayer(baseFillLayer)
+            container.addSublayer(shadeLayer)
+            container.addSublayer(highlightLayer)
 
-            // Desvanecido axial sobre el antebrazo (GPU).
+            // Desvanecido del antebrazo hacia el brazo real (GPU).
             wristMask.type = .axial
             wristMask.colors = [
                 UIColor.white.cgColor,
                 UIColor.white.cgColor,
-                UIColor(white: 1.0, alpha: 0.45).cgColor,
+                UIColor(white: 1.0, alpha: 0.42).cgColor,
                 UIColor.clear.cgColor
             ]
-            wristMask.locations = [0.0, 0.30, 0.70, 1.0]
+            wristMask.locations = [0.0, 0.34, 0.72, 1.0]
             container.mask = wristMask
         }
 
         func applyBounds(_ bounds: CGRect) {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
             container.frame = bounds
             wristMask.frame = bounds
             shadowLayer.frame = bounds
-            fillLayer.frame = bounds
             outlineLayer.frame = bounds
+            baseFillLayer.frame = bounds
+            shadeLayer.frame = bounds
+            shadeMask.frame = bounds
+            highlightLayer.frame = bounds
+            highlightMask.frame = bounds
+            CATransaction.commit()
         }
 
         func clear() {
             shadowLayer.path = nil
-            fillLayer.path = nil
             outlineLayer.path = nil
+            baseFillLayer.path = nil
+            shadeMask.path = nil
+            highlightMask.path = nil
         }
     }
 
     private let groups = [HandMeshGroup(), HandMeshGroup()]
-    private let pointerLayer = CAShapeLayer()
-    private let touchDotLayer = CAShapeLayer()
 
-    static let rayLength: CGFloat = 190
     var showsSkeleton = true
-    private var pointerVisible = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
         isOpaque = false
         layer.zPosition = 1000
-
         for group in groups { layer.addSublayer(group.container) }
-
-        pointerLayer.fillColor = UIColor.white.cgColor
-        pointerLayer.strokeColor = UIColor.white.withAlphaComponent(0.9).cgColor
-        pointerLayer.lineWidth = 2
-
-        touchDotLayer.fillColor = UIColor.clear.cgColor
-        touchDotLayer.strokeColor = UIColor(white: 0.95, alpha: 0.85).cgColor
-        touchDotLayer.lineWidth = 2
-
-        layer.addSublayer(touchDotLayer)
-        layer.addSublayer(pointerLayer)
     }
 
     required init?(coder: NSCoder) {
@@ -106,344 +142,207 @@ final class HandOverlayView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
         for group in groups { group.applyBounds(bounds) }
-        touchDotLayer.frame = bounds
-        pointerLayer.frame = bounds
-        CATransaction.commit()
     }
 
-    func setPointer(_ point: CGPoint?) {
-        pointerVisible = (point != nil)
-    }
-
-    // MARK: - Render
+    /// Se conserva por compatibilidad: el cursor ya no se dibuja.
+    func setPointer(_ point: CGPoint?) {}
 
     func render(poses: [HandPose]) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
         for (index, group) in groups.enumerated() {
-            if index < poses.count {
+            if index < poses.count, showsSkeleton {
                 renderSilhouette(pose: poses[index], group: group)
             } else {
                 group.clear()
             }
         }
 
-        if pointerVisible, let pose = poses.first, let tip = pose.joints[.indexTip] {
-            let base = pose.joints[.indexMCP] ?? pose.joints[.wrist] ?? tip
-            let dx = tip.x - base.x
-            let dy = tip.y - base.y
-            let len = max(hypot(dx, dy), 1)
-            let end = CGPoint(x: tip.x + dx / len * Self.rayLength, y: tip.y + dy / len * Self.rayLength)
-            let ray = UIBezierPath()
-            ray.move(to: tip)
-            ray.addLine(to: end)
-            ray.append(UIBezierPath(ovalIn: CGRect(x: end.x - 5, y: end.y - 5, width: 10, height: 10)))
-            pointerLayer.path = ray.cgPath
-        } else {
-            pointerLayer.path = nil
-        }
-
-        // Aro de contacto para Direct Touch (yema tocando una superficie).
-        if let pose = poses.first,
-           let tip = pose.joints[.indexTip],
-           let target = pose.joints[.indexDIP] {
-            let dx = tip.x - target.x
-            let dy = tip.y - target.y
-            let len = max(hypot(dx, dy), 1)
-            let end = CGPoint(x: tip.x + dx / len * 26, y: tip.y + dy / len * 26)
-            touchDotLayer.path = UIBezierPath(ovalIn: CGRect(x: end.x - 9, y: end.y - 9,
-                                                             width: 18, height: 18)).cgPath
-        } else {
-            touchDotLayer.path = nil
-        }
-
         CATransaction.commit()
     }
 
-    // MARK: - Silueta continua (mano + antebrazo)
+    // MARK: - Silueta
 
     private func renderSilhouette(pose: HandPose, group: HandMeshGroup) {
         let joints = pose.joints
-        guard let wrist = joints[.wrist],
-              let middleMCP = joints[.middleMCP] else {
+        guard let wrist = joints[.wrist], let middleMCP = joints[.middleMCP] else {
             group.clear()
             return
         }
 
-        let scale = min(max(pose.palmScale, 16), 320)
-
-        // Eje "hacia el pulgar" (radial) en pantalla: sirve para separar el lado
-        // pulgar y el lado meÃ±ique sin importar cÃ³mo estÃ© rotada la mano.
-        var radial = CGPoint(x: 1, y: 0)
-        if let index = joints[.indexMCP], let little = joints[.littleMCP] {
-            let dx = index.x - little.x
-            let dy = index.y - little.y
-            let len = hypot(dx, dy)
-            if len > 0.5 {
-                radial = CGPoint(x: dx / len, y: dy / len)
-            }
-        } else {
-            let palmDir = CGPoint(x: middleMCP.x - wrist.x, y: middleMCP.y - wrist.y)
-            let len = max(hypot(palmDir.x, palmDir.y), 0.001)
-            radial = CGPoint(x: -palmDir.y / len, y: palmDir.x / len)
-        }
-        let ulnar = CGPoint(x: -radial.x, y: -radial.y)
-
-        // DirecciÃ³n del antebrazo: muÃ±eca â†’ codo (Arm Tracking).
-        var armDir = pose.forearm.direction2D
-        let armLen = max(hypot(pose.forearm.elbow2D.x - wrist.x,
-                               pose.forearm.elbow2D.y - wrist.y), scale * 1.1)
-
-        // Si el codo quedÃ³ degenerado, usar la direcciÃ³n anatÃ³mica nudillos â†’ muÃ±eca.
-        if !armDir.x.isFinite || !armDir.y.isFinite || (armDir.x == 0 && armDir.y == 0) {
-            let dx = wrist.x - middleMCP.x
-            let dy = wrist.y - middleMCP.y
-            let len = max(hypot(dx, dy), 0.001)
-            armDir = CGPoint(x: dx / len, y: dy / len)
-        }
-
-        var contour: [CGPoint] = []
-
-        // ---- 1. Borde cubital de la palma: muÃ±eca â†’ meÃ±ique ----
-        let wristRadius = scale * 0.340
-        let ulnarStart = offset(wrist, ulnar, wristRadius)
-        contour.append(ulnarStart)
-
-        if let little = joints[.littleMCP] {
-            let midPalm = CGPoint(x: (wrist.x + little.x) * 0.5, y: (wrist.y + little.y) * 0.5)
-            contour.append(offset(midPalm, ulnar, scale * 0.450))
-        }
-
-        // ---- 2. Dedos, de meÃ±ique a pulgar (pulgar desde el MP: la base es la tenar) ----
-        let chains: [(finger: Int, names: [VNHumanHandPoseObservation.JointName])] = [
-            (4, [.littleMCP, .littlePIP, .littleDIP, .littleTip]),
-            (3, [.ringMCP, .ringPIP, .ringDIP, .ringTip]),
-            (2, [.middleMCP, .middlePIP, .middleDIP, .middleTip]),
-            (1, [.indexMCP, .indexPIP, .indexDIP, .indexTip]),
-            (0, [.thumbMP, .thumbIP, .thumbTip])
-        ]
-
-        // Recorrido: sube por el lado cubital del dedo, rodea la yema y baja por el radial.
-        // Entre dedo y dedo se inserta una Ãºnica muesca en V que sale del punto anterior
-        // y entra en el borde del siguiente: asÃ­ el contorno nunca se cruza.
-        var previousPoint = contour[contour.count - 1]
-        for chain in chains {
-            let pts = chain.names.compactMap { joints[$0] }
-            guard pts.count >= 2 else { continue }
-            let radii = fingerRadii(fingerIndex: chain.finger, scale: scale, count: pts.count)
-            let entryPoint = offset(pts[0], ulnar, radii[0])
-
-            let gap = hypot(previousPoint.x - entryPoint.x, previousPoint.y - entryPoint.y)
-            if gap > scale * 0.04 {
-                let web = CGPoint(x: (previousPoint.x + entryPoint.x) * 0.5,
-                                  y: (previousPoint.y + entryPoint.y) * 0.5)
-                let towardWrist = CGPoint(x: wrist.x - web.x, y: wrist.y - web.y)
-                let wl = max(hypot(towardWrist.x, towardWrist.y), 0.001)
-                let depth = min(scale * 0.20, gap * 0.55)
-                contour.append(CGPoint(x: web.x + towardWrist.x / wl * depth,
-                                       y: web.y + towardWrist.y / wl * depth))
-            }
-
-            appendFinger(contour: &contour, points: pts, radii: radii,
-                         entrySide: ulnar, exitSide: radial,
-                         radial: radial, side: 1.0)
-            previousPoint = contour[contour.count - 1]
-        }
-
-        // ---- 3. Eminencia tenar y borde radial de la palma: pulgar â†’ muÃ±eca ----
-        if let cmc = joints[.thumbCMC] {
-            contour.append(offset(cmc, radial, scale * 0.175))
-            let midThenar = CGPoint(x: (cmc.x + wrist.x) * 0.5, y: (cmc.y + wrist.y) * 0.5)
-            contour.append(offset(midThenar, radial, scale * 0.345))
-        }
-        let radialStart = offset(wrist, radial, wristRadius)
-        contour.append(radialStart)
-
-        // ---- 4. Antebrazo: baja por el radial, rodea el extremo y sube por el cubital ----
-        let elbow = CGPoint(x: wrist.x + armDir.x * armLen, y: wrist.y + armDir.y * armLen)
-        let armRadius = scale * 0.400
-
-        let radialCapPoint = offset(elbow, radial, armRadius)
-        let ulnarCapPoint = offset(elbow, ulnar, armRadius)
-
-        appendLine(&contour, from: radialStart, to: radialCapPoint, steps: 3)
-
-        // Extremo del brazo: arco que abomba en la direcciÃ³n del antebrazo
-        // (queda prÃ¡cticamente invisible por el fade de la mÃ¡scara).
-        appendArc(&contour,
-                  center: elbow,
-                  radius: armRadius,
-                  from: angleOfVector(radial),
-                  to: angleOfVector(ulnar),
-                  clockwise: false,
-                  steps: 10,
-                  referenceDirection: angleOfVector(armDir))
-
-        appendLine(&contour, from: ulnarCapPoint, to: ulnarStart, steps: 3)
-
-        guard contour.count >= 8 else { group.clear(); return }
-
-        // ---- 6. Construir el path con winding positivo (sin huecos) ----
+        let scale = min(max(pose.palmScale, 14), 340)
         let path = CGMutablePath()
-        let ordered = positiveWinding(contour)
-        path.move(to: ordered[0])
-        for i in 1..<ordered.count { path.addLine(to: ordered[i]) }
-        path.closeSubpath()
 
-        // MÃ¡scara de desvanecido a lo largo del antebrazo (de la muÃ±eca hacia el codo).
+        // --- Antebrazo ---
+        var armDir = pose.forearm.direction2D
+        if !armDir.x.isFinite || !armDir.y.isFinite || (abs(armDir.x) + abs(armDir.y)) < 0.01 {
+            armDir = normalize(CGPoint(x: wrist.x - middleMCP.x, y: wrist.y - middleMCP.y),
+                               fallback: CGPoint(x: 0, y: 1))
+        }
+        let armLength = max(hypot(pose.forearm.elbow2D.x - wrist.x,
+                                  pose.forearm.elbow2D.y - wrist.y), scale * 1.2)
+        let elbow = CGPoint(x: wrist.x + armDir.x * armLength,
+                            y: wrist.y + armDir.y * armLength)
+
+        addCapsule(to: path, from: wrist, to: elbow,
+                   rA: scale * 0.330, rB: scale * 0.395)
+
+        // --- Volumen de la palma ---
+        let hullNames: [VNHumanHandPoseObservation.JointName] = [
+            .wrist, .thumbCMC, .indexMCP, .middleMCP, .ringMCP, .littleMCP
+        ]
+        let hull = hullNames.compactMap { joints[$0] }
+        if hull.count >= 3 { addPolygon(to: path, points: hull) }
+
+        let palmBridges: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName, CGFloat)] = [
+            (.indexMCP, .middleMCP, 0.170),
+            (.middleMCP, .ringMCP, 0.170),
+            (.ringMCP, .littleMCP, 0.158),
+            (.thumbCMC, .indexMCP, 0.195),
+            (.wrist, .thumbCMC, 0.225),
+            (.wrist, .littleMCP, 0.205),
+            (.wrist, .middleMCP, 0.200),
+            (.wrist, .indexMCP, 0.195),
+            (.wrist, .ringMCP, 0.195)
+        ]
+        for (fromName, toName, radius) in palmBridges {
+            guard let a = joints[fromName], let b = joints[toName] else { continue }
+            addCapsule(to: path, from: a, to: b,
+                       rA: scale * radius, rB: scale * radius * 0.94)
+        }
+
+        // --- 19 huesos ---
+        // Los más lejanos primero: los dedos que están delante quedan encima.
+        let orderedBones = pose.bones3D.sorted { $0.depthMeters > $1.depthMeters }
+        for bone in orderedBones {
+            addCapsule(to: path,
+                       from: bone.start2D,
+                       to: bone.end2D,
+                       rA: scale * bone.definition.radiusStartRatio,
+                       rB: scale * bone.definition.radiusEndRatio)
+        }
+
+        guard !path.isEmpty else {
+            group.clear()
+            return
+        }
+
+        // --- Desvanecido del antebrazo ---
         let w = max(bounds.width, 1)
         let h = max(bounds.height, 1)
-        let maskFrom = CGPoint(x: wrist.x - armDir.x * (scale * 0.55),
-                               y: wrist.y - armDir.y * (scale * 0.55))
-        let maskTo = CGPoint(x: wrist.x + armDir.x * (armLen * 0.92),
-                             y: wrist.y + armDir.y * (armLen * 0.92))
+        let maskFrom = CGPoint(x: wrist.x - armDir.x * (scale * 0.30),
+                               y: wrist.y - armDir.y * (scale * 0.30))
+        let maskTo = CGPoint(x: wrist.x + armDir.x * (armLength * 0.95),
+                             y: wrist.y + armDir.y * (armLength * 0.95))
         group.wristMask.startPoint = CGPoint(x: maskFrom.x / w, y: maskFrom.y / h)
         group.wristMask.endPoint = CGPoint(x: maskTo.x / w, y: maskTo.y / h)
 
-        // Grosor del contorno segÃºn profundidad real (mÃ¡s cerca = lÃ­nea algo mÃ¡s marcada).
-        let depthFactor = CGFloat(min(max(0.65 / max(CGFloat(pose.depthMeters), 0.10), 0.75), 1.8))
-        group.outlineLayer.lineWidth = 1.55 * depthFactor
-        group.outlineLayer.strokeColor = UIColor(white: 0.93, alpha: 0.92).cgColor
-        group.fillLayer.fillColor = UIColor(white: 0.115, alpha: 0.58).cgColor
+        // Grosor del contorno según profundidad real (más cerca = algo más marcado).
+        let depthFactor = CGFloat(min(max(0.62 / max(CGFloat(pose.depthMeters), 0.12), 0.80), 1.60))
+        group.outlineLayer.lineWidth = 3.6 * depthFactor
 
-        group.fillLayer.path = path
-        group.fillLayer.shadowColor = UIColor.black.cgColor
-        group.fillLayer.shadowOpacity = 0.0
-        group.outlineLayer.path = path
-
-        // Sombra de contacto desplazada: sensaciÃ³n de volumen sobre el escenario.
+        // Sombra de contacto desplazada (apoya la mano sobre el escenario).
         let shadowPath = CGMutablePath()
-        shadowPath.addPath(path, transform: CGAffineTransform(translationX: 3, y: 6))
+        shadowPath.addPath(path, transform: CGAffineTransform(translationX: 2.5, y: 5.0))
+
         group.shadowLayer.path = shadowPath
-        group.shadowLayer.fillColor = UIColor.black.withAlphaComponent(0.24).cgColor
-        group.shadowLayer.compositingFilter = nil
-    }
+        group.outlineLayer.path = path
+        group.baseFillLayer.path = path
+        group.shadeMask.path = path
+        group.highlightMask.path = path
 
-    // MARK: - Dedos
-
-    private func fingerRadii(fingerIndex: Int, scale: CGFloat, count: Int) -> [CGFloat] {
-        let defs = HandTracker.boneDefinitions
-            .filter { $0.fingerIndex == fingerIndex }
-            .sorted { $0.segmentIndex < $1.segmentIndex }
-        var radii = defs.map { scale * $0.radiusStartRatio }
-        if let last = defs.last { radii.append(scale * last.radiusEndRatio) }
-
-        // El pulgar se dibuja desde el MP: la base (CMC) forma parte de la eminencia tenar.
-        if fingerIndex == 0, count == 3, radii.count >= 4 {
-            radii = Array(radii.dropFirst())
-        }
-
-        while radii.count < count { radii.append(radii.last ?? scale * 0.1) }
-        if radii.count > count { radii = Array(radii.prefix(count - 1)) + [radii[count - 1]] }
-        return radii
-    }
-
-    /// AÃ±ade al contorno un dedo completo: lado de entrada â†’ punta redondeada â†’ lado de salida.
-    private func appendFinger(contour: inout [CGPoint],
-                              points: [CGPoint],
-                              radii: [CGFloat],
-                              entrySide: CGPoint,
-                              exitSide: CGPoint,
-                              radial: CGPoint,
-                              side: CGFloat) {
-        guard points.count >= 2, radii.count >= 2 else { return }
-        _ = radial
-        _ = side
-
-        // Lado de entrada (de la base hacia la punta).
-        for i in 0..<points.count {
-            contour.append(offset(points[i], entrySide, radii[min(i, radii.count - 1)]))
-        }
-
-        // Punta: semicÃ­rculo del lado de entrada al de salida.
-        let tip = points[points.count - 1]
-        let prev = points[points.count - 2]
-        let dirAngle = atan2(tip.y - prev.y, tip.x - prev.x)
-
-        // Ãngulos absolutos de cada lado en la punta.
-        let entryAngle = angleOfVector(entrySide)
-        let exitAngle = angleOfVector(exitSide)
-
-        let rTip = max(radii[radii.count - 1], 1.0)
-        appendArc(&contour, center: tip, radius: rTip,
-                  from: entryAngle, to: exitAngle,
-                  clockwise: false, steps: 7,
-                  referenceDirection: dirAngle)
-
-        // Lado de salida (de la punta hacia la base).
-        for i in stride(from: points.count - 1, through: 0, by: -1) {
-            contour.append(offset(points[i], exitSide, radii[min(i, radii.count - 1)]))
-        }
-    }
-
-    private func angleOfVector(_ v: CGPoint) -> CGFloat {
-        atan2(v.y, v.x)
+        // El degradado de luz arranca en la punta de los dedos y baja hacia la muñeca:
+        // así el volumen sigue la forma de la mano en cualquier orientación.
+        let top = joints[.middleTip] ?? middleMCP
+        group.shadeLayer.startPoint = CGPoint(x: top.x / w, y: top.y / h)
+        group.shadeLayer.endPoint = CGPoint(x: wrist.x / w, y: wrist.y / h)
+        group.highlightLayer.startPoint = CGPoint(x: (pose.palmCenter.x / w),
+                                                  y: (pose.palmCenter.y / h))
+        group.highlightLayer.endPoint = CGPoint(x: min((pose.palmCenter.x / w) + 0.55, 1.4),
+                                                y: min((pose.palmCenter.y / h) + 0.55, 1.4))
     }
 
     // MARK: - Primitivas
 
-    private func offset(_ p: CGPoint, _ dir: CGPoint, _ r: CGFloat) -> CGPoint {
-        CGPoint(x: p.x + dir.x * r, y: p.y + dir.y * r)
+    private func normalize(_ p: CGPoint, fallback: CGPoint) -> CGPoint {
+        let len = hypot(p.x, p.y)
+        guard len > 1e-4 else { return fallback }
+        return CGPoint(x: p.x / len, y: p.y / len)
     }
 
-    private func appendLine(_ contour: inout [CGPoint], from a: CGPoint, to b: CGPoint, steps: Int) {
-        let safeSteps = max(steps, 1)
-        for i in 1...safeSteps {
-            let t = CGFloat(i) / CGFloat(safeSteps)
-            contour.append(CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t))
-        }
-    }
+    /// Cápsula cónica. Todos los subpaths se fuerzan al mismo sentido de giro para que
+    /// `fillRule = .nonZero` no abra huecos en las uniones.
+    private func addCapsule(to path: CGMutablePath,
+                            from a: CGPoint,
+                            to b: CGPoint,
+                            rA: CGFloat,
+                            rB: CGFloat,
+                            capSamples: Int = 8) {
+        let safeRA = max(rA, 0.8)
+        let safeRB = max(rB, 0.8)
+        let dx = b.x - a.x
+        let dy = b.y - a.y
+        let distance = hypot(dx, dy)
 
-    /// AÃ±ade puntos de arco tomando el camino mÃ¡s corto entre los dos Ã¡ngulos.
-    private func appendArc(_ contour: inout [CGPoint],
-                           center: CGPoint,
-                           radius: CGFloat,
-                           from startAngle: CGFloat,
-                           to endAngle: CGFloat,
-                           clockwise: Bool,
-                           steps: Int,
-                           referenceDirection: CGFloat? = nil) {
-        var delta = endAngle - startAngle
-        while delta <= -.pi { delta += .pi * 2 }
-        while delta > .pi { delta -= .pi * 2 }
-
-        // La punta tiene que abombarse en la direcciÃ³n del dedo: si el punto medio del
-        // arco no coincide con esa direcciÃ³n, se recorre por el otro lado.
-        if let ref = referenceDirection {
-            let outward = normalizeAngle(ref - (startAngle + delta * 0.5))
-            if abs(outward) > .pi * 0.45 {
-                delta = delta > 0 ? delta - .pi * 2 : delta + .pi * 2
+        if distance < 0.6 {
+            var points: [CGPoint] = []
+            let radius = max(safeRA, safeRB)
+            for i in 0..<16 {
+                let theta = CGFloat(i) / 16 * 2 * .pi
+                points.append(CGPoint(x: a.x + cos(theta) * radius,
+                                      y: a.y + sin(theta) * radius))
             }
+            addPolygon(to: path, points: points)
+            return
         }
-        _ = clockwise
 
-        let safeSteps = max(steps, 3)
-        for i in 0...safeSteps {
-            let t = CGFloat(i) / CGFloat(safeSteps)
-            let a = startAngle + delta * t
-            contour.append(CGPoint(x: center.x + cos(a) * radius,
-                                   y: center.y + sin(a) * radius))
+        let angle = atan2(dy, dx)
+        var points: [CGPoint] = []
+        points.reserveCapacity(capSamples * 2 + 4)
+
+        // Lado "izquierdo": base → punta.
+        let left = angle + .pi / 2
+        points.append(CGPoint(x: a.x + cos(left) * safeRA, y: a.y + sin(left) * safeRA))
+        points.append(CGPoint(x: b.x + cos(left) * safeRB, y: b.y + sin(left) * safeRB))
+
+        // Extremo b: semicírculo por delante.
+        for i in 1...capSamples {
+            let t = CGFloat(i) / CGFloat(capSamples)
+            let theta = angle + .pi / 2 - .pi * t
+            points.append(CGPoint(x: b.x + cos(theta) * safeRB, y: b.y + sin(theta) * safeRB))
         }
+
+        // Lado "derecho": punta → base.
+        let right = angle - .pi / 2
+        points.append(CGPoint(x: b.x + cos(right) * safeRB, y: b.y + sin(right) * safeRB))
+        points.append(CGPoint(x: a.x + cos(right) * safeRA, y: a.y + sin(right) * safeRA))
+
+        // Extremo a: semicírculo por detrás.
+        for i in 1...capSamples {
+            let t = CGFloat(i) / CGFloat(capSamples)
+            let theta = angle - .pi / 2 - .pi * t
+            points.append(CGPoint(x: a.x + cos(theta) * safeRA, y: a.y + sin(theta) * safeRA))
+        }
+
+        addPolygon(to: path, points: points)
     }
 
-    private func normalizeAngle(_ a: CGFloat) -> CGFloat {
-        var v = a
-        while v <= -.pi { v += .pi * 2 }
-        while v > .pi { v -= .pi * 2 }
-        return v
-    }
+    /// Polígono cerrado con área positiva garantizada (sentido de giro consistente).
+    private func addPolygon(to path: CGMutablePath, points: [CGPoint]) {
+        guard points.count >= 3 else { return }
 
-    private func positiveWinding(_ points: [CGPoint]) -> [CGPoint] {
         var area: CGFloat = 0
         for i in 0..<points.count {
             let a = points[i]
             let b = points[(i + 1) % points.count]
             area += (a.x * b.y - b.x * a.y)
         }
-        return area >= 0 ? points : Array(points.reversed())
+        let ordered = area >= 0 ? points : Array(points.reversed())
+
+        path.move(to: ordered[0])
+        for i in 1..<ordered.count { path.addLine(to: ordered[i]) }
+        path.closeSubpath()
     }
 }

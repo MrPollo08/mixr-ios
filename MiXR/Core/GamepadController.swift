@@ -32,8 +32,10 @@ final class GamepadController {
 
     /// Botón A: abre / cierra el menú.
     var onPrimary: (() -> Void)?
-    /// Botón B o X: recentrar.
+    /// Botón B: recentrar.
     var onSecondary: (() -> Void)?
+    /// Botón X: alternar autofoco.
+    var onTertiary: (() -> Void)?
 
     init() {
         NotificationCenter.default.addObserver(forName: .GCControllerDidConnect,
@@ -59,17 +61,21 @@ final class GamepadController {
         let secondary: (GCControllerButtonInput, Float, Bool) -> Void = { [weak self] _, _, pressed in
             if pressed { self?.onSecondary?() }
         }
+        let tertiary: (GCControllerButtonInput, Float, Bool) -> Void = { [weak self] _, _, pressed in
+            if pressed { self?.onTertiary?() }
+        }
 
         if let pad = controller.extendedGamepad {
             pad.buttonA.pressedChangedHandler = primary
             pad.buttonB.pressedChangedHandler = secondary
-            pad.buttonX.pressedChangedHandler = secondary
+            pad.buttonX.pressedChangedHandler = tertiary
         } else if let pad = controller.gamepad {
             pad.buttonA.pressedChangedHandler = primary
             pad.buttonB.pressedChangedHandler = secondary
+            pad.buttonX.pressedChangedHandler = tertiary
         } else if let pad = controller.microGamepad {
             pad.buttonA.pressedChangedHandler = primary
-            pad.buttonX.pressedChangedHandler = secondary
+            pad.buttonX.pressedChangedHandler = tertiary
         }
     }
 }

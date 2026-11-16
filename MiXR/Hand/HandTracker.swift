@@ -6,19 +6,19 @@ import UIKit
 import Vision
 import simd
 
-/// DefiniciÃ³n de un hueso anatÃ³mico para la malla 3D low-poly de la mano.
+/// Definición de un hueso anatómico para la malla 3D low-poly de la mano.
 struct HandBoneDefinition {
     let parent: VNHumanHandPoseObservation.JointName
     let child: VNHumanHandPoseObservation.JointName
-    /// 0 = pulgar, 1 = Ã­ndice, 2 = medio, 3 = anular, 4 = meÃ±ique.
+    /// 0 = pulgar, 1 = índice, 2 = medio, 3 = anular, 4 = meñique.
     let fingerIndex: Int
-    /// 0 = metacarpiano/proximal, 1 = intermedio, 2 = distal, 3 = punta.
+    /// 0 = proximal, 1 = intermedio, 2 = distal, 3 = punta.
     let segmentIndex: Int
     let radiusStartRatio: CGFloat
     let radiusEndRatio: CGFloat
 }
 
-/// Estado de un hueso 3D ya transformado y suavizado con One-Euro.
+/// Un hueso 3D ya calculado y suavizado con One-Euro.
 struct HandBonePose3D {
     let definition: HandBoneDefinition
     let start2D: CGPoint
@@ -29,8 +29,7 @@ struct HandBonePose3D {
     let depthMeters: Float
 }
 
-/// Eje 3D del antebrazo (Arm Tracking): permite seguir el brazo aunque el codo
-/// quede fuera de cuadro o el dedo se salga del frame.
+/// Eje 3D del antebrazo (Arm Tracking).
 struct HandForearmPose {
     let wrist2D: CGPoint
     let midForearm2D: CGPoint
@@ -41,13 +40,12 @@ struct HandForearmPose {
     let elbowWorld3D: simd_float3
     let wristDepthMeters: Float
     let elbowDepthMeters: Float
-    /// Ancho del antebrazo estimado en puntos de pantalla.
     let widthPoints: CGFloat
-    /// DirecciÃ³n unitaria (2D, pantalla) muÃ±eca â†’ codo.
+    /// Dirección unitaria (pantalla) muñeca → codo.
     let direction2D: CGPoint
 }
 
-/// Una mano detectada por Vision + LiDAR, suavizada con One-Euro en 2D y 3D.
+/// Una mano detectada: 21 articulaciones 2D y 3D, huesos y antebrazo.
 struct HandPose {
     let key: String
     let joints: [VNHumanHandPoseObservation.JointName: CGPoint]
@@ -55,7 +53,6 @@ struct HandPose {
     let jointsWorld3D: [VNHumanHandPoseObservation.JointName: simd_float3]
     let jointDepths: [VNHumanHandPoseObservation.JointName: Float]
     let bones3D: [HandBonePose3D]
-    /// Antebrazo/brazo que acompaÃ±a a la mano.
     let forearm: HandForearmPose
     let depthMeters: Float
     let hasLiDAR: Bool
@@ -66,17 +63,30 @@ struct HandPose {
     let closedFist: Bool
     let palmCenter: CGPoint
     let palmNormalCamera3D: simd_float3
-    /// Producto escalar entre la normal de la palma y el eje de visiÃ³n:
-    /// > 0 significa que la palma estÃ¡ mirando hacia la cÃ¡mara del telÃ©fono.
+    /// > 0 significa palma mirando al teléfono (corregido por lateralidad).
     let palmFacingScore: Float
     let confidence: CGFloat
-    /// Escala de la palma en puntos de pantalla (muÃ±eca â†’ nudillo medio).
     let palmScale: CGFloat
 
     var isPalmFacingCamera: Bool { palmFacingScore > 0.35 }
 
-    /// Copia la mano con articulaciones 2D nuevas (usado por la predicción de
-    /// movimiento para compensar la latencia de Vision entre frames).
+    /// Tres dedos extendidos: distingue mano abierta de pinza o de señalar.
+    var isOpenHand: Bool {
+        guard let wrist = joints[.wrist] else { return false }
+        let pairs: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
+            (.middleTip, .middleMCP), (.ringTip, .ringMCP), (.littleTip, .littleMCP)
+        ]
+        var extended = 0
+        for (tipName, mcpName) in pairs {
+            guard let tip = joints[tipName], let mcp = joints[mcpName] else { continue }
+            let tipDistance = hypot(tip.x - wrist.x, tip.y - wrist.y)
+            let mcpDistance = max(hypot(mcp.x - wrist.x, mcp.y - wrist.y), 1)
+            if tipDistance / mcpDistance > 1.25 { extended += 1 }
+        }
+        return extended == 3
+    }
+
+    /// Copia con articulaciones 2D nuevas (predicción de movimiento).
     func replacingJoints(_ newJoints: [VNHumanHandPoseObservation.JointName: CGPoint]) -> HandPose {
         let thumb = newJoints[.thumbTip] ?? pinchPoint
         let index = newJoints[.indexTip] ?? pinchPoint
@@ -106,25 +116,7 @@ struct HandPose {
                         palmScale: palmScale)
     }
 
-    /// Tres dedos (medio, anular y meÃ±ique) claramente extendidos: es lo que
-    /// distingue "mano abierta" de un gesto de pinza o de seÃ±alar.
-    var isOpenHand: Bool {
-        guard let wrist = joints[.wrist] else { return false }
-        let pairs: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
-            (.middleTip, .middleMCP), (.ringTip, .ringMCP), (.littleTip, .littleMCP)
-        ]
-        var extended = 0
-        for (tipName, mcpName) in pairs {
-            guard let tip = joints[tipName], let mcp = joints[mcpName] else { continue }
-            let tipDistance = hypot(tip.x - wrist.x, tip.y - wrist.y)
-            let mcpDistance = max(hypot(mcp.x - wrist.x, mcp.y - wrist.y), 1)
-            if tipDistance / mcpDistance > 1.25 { extended += 1 }
-        }
-        return extended == 3
-    }
-
-    /// Desproyecta/reproyecta las 21 articulaciones y el antebrazo a la cÃ¡mara de un
-    /// ojo concreto para conseguir disparidad estereoscÃ³pica real en la caja VR.
+    /// Reproyecta las 21 articulaciones y el antebrazo al ojo indicado (VR box).
     func projected(for eyePose: CameraPose) -> HandPose {
         guard !jointsWorld3D.isEmpty else { return self }
 
@@ -143,10 +135,8 @@ struct HandPose {
 
         let thumb = eye2D[.thumbTip] ?? pinchPoint
         let index = eye2D[.indexTip] ?? pinchPoint
-        let newPinch = CGPoint(x: (thumb.x + index.x) * 0.5, y: (thumb.y + index.y) * 0.5)
         let wrist = eye2D[.wrist] ?? palmCenter
         let middle = eye2D[.middleMCP] ?? palmCenter
-        let newPalm = CGPoint(x: (wrist.x + middle.x) * 0.5, y: (wrist.y + middle.y) * 0.5)
 
         let newBones = HandTracker.buildBones3D(joints2D: eye2D,
                                                 jointsCamera3D: eyeCam,
@@ -156,13 +146,12 @@ struct HandPose {
         var newForearm = forearm
         if let projElbow = eyePose.project(forearm.elbowWorld3D),
            let projWrist = eyePose.project(forearm.wristWorld3D) {
-            let mid = CGPoint(x: (projElbow.center.x + projWrist.center.x) * 0.5,
-                              y: (projElbow.center.y + projWrist.center.y) * 0.5)
             let dx = projElbow.center.x - projWrist.center.x
             let dy = projElbow.center.y - projWrist.center.y
             let len = max(hypot(dx, dy), 0.001)
             newForearm = HandForearmPose(wrist2D: projWrist.center,
-                                         midForearm2D: mid,
+                                         midForearm2D: CGPoint(x: (projElbow.center.x + projWrist.center.x) * 0.5,
+                                                               y: (projElbow.center.y + projWrist.center.y) * 0.5),
                                          elbow2D: projElbow.center,
                                          wristCamera3D: eyePose.worldToCamera(forearm.wristWorld3D),
                                          elbowCamera3D: eyePose.worldToCamera(forearm.elbowWorld3D),
@@ -183,12 +172,14 @@ struct HandPose {
                         forearm: newForearm,
                         depthMeters: depthMeters,
                         hasLiDAR: hasLiDAR,
-                        pinchPoint: newPinch,
+                        pinchPoint: CGPoint(x: (thumb.x + index.x) * 0.5,
+                                            y: (thumb.y + index.y) * 0.5),
                         pinchWorld3D: pinchWorld3D,
                         pinch: pinch,
                         openPalm: openPalm,
                         closedFist: closedFist,
-                        palmCenter: newPalm,
+                        palmCenter: CGPoint(x: (wrist.x + middle.x) * 0.5,
+                                            y: (wrist.y + middle.y) * 0.5),
                         palmNormalCamera3D: palmNormalCamera3D,
                         palmFacingScore: palmFacingScore,
                         confidence: confidence,
@@ -196,8 +187,8 @@ struct HandPose {
     }
 }
 
-/// Pipeline asÃ­ncrono de seguimiento:
-/// **Apple Vision (Mano 21 pts + Cuerpo/Brazo) + Sensor LiDAR + Filtro One-Euro 3D**.
+/// Pipeline asíncrono:
+/// **Apple Vision (mano 21 pts + cuerpo/brazo) + LiDAR + filtro One-Euro 3D**.
 final class HandTracker {
 
     static let connections: [[VNHumanHandPoseObservation.JointName]] = [
@@ -209,6 +200,7 @@ final class HandTracker {
         [.indexMCP, .middleMCP, .ringMCP, .littleMCP]
     ]
 
+    /// Radios anatómicos medidos sobre una mano adulta (fracción de la palma).
     static let boneDefinitions: [HandBoneDefinition] = [
         HandBoneDefinition(parent: .wrist, child: .thumbCMC, fingerIndex: 0, segmentIndex: 0, radiusStartRatio: 0.150, radiusEndRatio: 0.138),
         HandBoneDefinition(parent: .thumbCMC, child: .thumbMP, fingerIndex: 0, segmentIndex: 1, radiusStartRatio: 0.138, radiusEndRatio: 0.126),
@@ -252,17 +244,20 @@ final class HandTracker {
     private var lastBodyAt: CFTimeInterval = 0
     private var cachedElbows: [CGPoint] = []
     private var cachedWrists: [CGPoint] = []
-    /// TamaÃ±o real de la palma del usuario (muÃ±eca â†’ nudillo medio), calibrado con LiDAR.
+
+    /// Tamaño real de la palma del usuario, calibrado con LiDAR.
     private var palmCalibration: [String: Float] = [:]
     private var palmCalibrationSamples: [String: Int] = [:]
 
-    /// Cadencia de Vision (~30 Hz) y del cuerpo (~9 Hz, es lo mÃ¡s caro).
+    /// Cadencia de Vision (~30 Hz). El cuerpo va más lento porque es caro.
     var interval: TimeInterval = Config.handTrackingInterval
     private var busy = false
 
     init() {
         handRequest.maximumHandCount = 2
     }
+
+    // MARK: - API
 
     func submit(pixelBuffer: CVPixelBuffer,
                 depthMap: CVPixelBuffer? = nil,
@@ -310,7 +305,7 @@ final class HandTracker {
         }
     }
 
-    // MARK: - DetecciÃ³n
+    // MARK: - Detección
 
     private func detect(pixelBuffer: CVPixelBuffer,
                         depthMap: CVPixelBuffer?,
@@ -322,15 +317,15 @@ final class HandTracker {
                         timestamp: CFTimeInterval) -> [HandPose] {
         let projector = ImageProjector(viewportSize: viewportSize, imageAspect: imageAspect)
 
-        // --- Arm Tracking: Vision Body Pose (codos y muÃ±ecas) a ~9 Hz ---
+        // --- Arm Tracking: cuerpo a ~9 Hz ---
         if timestamp - lastBodyAt > 0.11 {
             lastBodyAt = timestamp
             do {
                 try sequence.perform([bodyRequest], on: pixelBuffer, orientation: orientation)
                 if let body = bodyRequest.results?.first,
                    let pts = try? body.recognizedPoints(.all) {
-                    cachedElbows = Self.points(named: [.leftElbow, .rightElbow], in: pts, projector: projector)
-                    cachedWrists = Self.points(named: [.leftWrist, .rightWrist], in: pts, projector: projector)
+                    cachedElbows = Self.collect([.leftElbow, .rightElbow], from: pts, projector: projector)
+                    cachedWrists = Self.collect([.leftWrist, .rightWrist], from: pts, projector: projector)
                 }
             } catch {
                 cachedElbows = []
@@ -341,7 +336,7 @@ final class HandTracker {
         do {
             try sequence.perform([handRequest], on: pixelBuffer, orientation: orientation)
         } catch {
-            return []
+            return persistedPoses(seen: [], timestamp: timestamp)
         }
 
         let observations = handRequest.results ?? []
@@ -356,64 +351,66 @@ final class HandTracker {
             default: key = "U\(poses.count)"
             }
             guard !seen.contains(key) else { continue }
-            seen.insert(key)
 
             guard let raw = try? observation.recognizedPoints(.all) else { continue }
 
-            // 1. ProyecciÃ³n 2D + One-Euro 2D por articulaciÃ³n.
+            // 1. Articulaciones 2D con One-Euro por punto.
             var joints2D: [VNHumanHandPoseObservation.JointName: CGPoint] = [:]
-            for (name, point) in raw where point.confidence > 0.10 {
+            for (name, point) in raw where point.confidence > 0.08 {
                 let mapped = projector.map(CGPoint(x: CGFloat(point.location.x),
                                                    y: CGFloat(point.location.y)))
                 joints2D[name] = filterJoint2D(key: key, name: name, value: mapped, timestamp: timestamp)
             }
-            guard joints2D.count >= 4 else { continue }
 
-            // 2. Completar articulaciones faltantes por cinemÃ¡tica (nunca una mano a medias).
-            Self.completeMissingJoints(&joints2D, chiralityKey: key, fallbackCenter: projector.map(.init(x: 0.5, y: 0.4)))
+            // 2. NUNCA se descarta la mano por faltar puntos: se completa el esqueleto.
+            guard joints2D.count >= 2 else { continue }
+            Self.completeMissingJoints(&joints2D,
+                                       chiralityKey: key,
+                                       fallbackCenter: CGPoint(x: viewportSize.width * 0.5,
+                                                               y: viewportSize.height * 0.75))
 
-            guard let wrist = joints2D[.wrist], let middle = joints2D[.middleMCP] else { continue }
+            guard let wrist = joints2D[.wrist], let middleMCP = joints2D[.middleMCP] else { continue }
 
-            var palmScale = hypot(wrist.x - middle.x, wrist.y - middle.y)
+            var palmScale = hypot(wrist.x - middleMCP.x, wrist.y - middleMCP.y)
             if palmScale < 6 { palmScale = 34 }
 
-            // --- EstabilizaciÃ³n esqueletal ---
-            // 1. NingÃºn hueso puede medir en pantalla mÃ¡s de lo que mide de verdad
-            //    (elimina dedos que "se estiran" hacia otro punto de la mano).
+            // 3. Estabilización esqueletal.
             Self.enforceMaxBoneLengths(&joints2D, palmScale: palmScale)
-            // 2. Un salto brusco de una articulaciÃ³n con la palma quieta es un error de
-            //    Vision, no un movimiento: se descarta y se conserva el frame anterior.
-            let previous = lastPoses[key]
             Self.rejectOutliers(&joints2D,
-                                previous: previous,
-                                palmCenter: CGPoint(x: (wrist.x + middle.x) * 0.5,
-                                                    y: (wrist.y + middle.y) * 0.5),
+                                previous: lastPoses[key],
+                                palmCenter: CGPoint(x: (wrist.x + middleMCP.x) * 0.5,
+                                                    y: (wrist.y + middleMCP.y) * 0.5),
                                 palmScale: palmScale)
 
-            // Recalcular tras las correcciones.
-            let thumbFixed = joints2D[.thumbTip] ?? palmCenterFallback(wrist: wrist, middle: middle)
-            let indexFixed = joints2D[.indexTip] ?? joints2D[.indexPIP] ?? palmCenterFallback(wrist: wrist, middle: middle)
-            let middleFixed = joints2D[.middleMCP] ?? middle
+            let finalWrist = joints2D[.wrist] ?? wrist
+            let finalMiddle = joints2D[.middleMCP] ?? middleMCP
+            var palmScaleFinal = hypot(finalWrist.x - finalMiddle.x, finalWrist.y - finalMiddle.y)
+            if palmScaleFinal < 6 { palmScaleFinal = 34 }
+            let palmCenter = CGPoint(x: (finalWrist.x + finalMiddle.x) * 0.5,
+                                     y: (finalWrist.y + finalMiddle.y) * 0.5)
 
-            var palmScaleFixed = hypot(wrist.x - middleFixed.x, wrist.y - middleFixed.y)
-            if palmScaleFixed < 6 { palmScaleFixed = 34 }
-            let palmCenter = CGPoint(x: (wrist.x + middleFixed.x) * 0.5,
-                                     y: (wrist.y + middleFixed.y) * 0.5)
+            seen.insert(key)
 
-            // 3. Arm Tracking: codo mÃ¡s cercano a esta muÃ±eca.
-            let bestElbow = Self.closestPoint(to: wrist, in: cachedElbows, maxDistance: palmScaleFixed * 6.0)
+            // 4. Codo más cercano a esta muñeca.
+            let bestElbow = Self.closest(to: finalWrist, in: cachedElbows,
+                                         maxDistance: palmScaleFinal * 6.0)
 
-            // 4. ReconstrucciÃ³n 3D con LiDAR + antebrazo.
+            // 5. Reconstrucción 3D con LiDAR.
             var cameraJoints: [VNHumanHandPoseObservation.JointName: simd_float3] = [:]
             var worldJoints: [VNHumanHandPoseObservation.JointName: simd_float3] = [:]
             var jointDepths: [VNHumanHandPoseObservation.JointName: Float] = [:]
             var palmDepth: Float = 0.42
             var hasLiDAR = false
-            var forearm = HandForearmPose(wrist2D: wrist, midForearm2D: wrist, elbow2D: wrist,
-                                          wristCamera3D: .zero, elbowCamera3D: .zero,
-                                          wristWorld3D: .zero, elbowWorld3D: .zero,
-                                          wristDepthMeters: 0.42, elbowDepthMeters: 0.42,
-                                          widthPoints: palmScaleFixed * 0.62,
+            var forearm = HandForearmPose(wrist2D: finalWrist,
+                                          midForearm2D: finalWrist,
+                                          elbow2D: finalWrist,
+                                          wristCamera3D: .zero,
+                                          elbowCamera3D: .zero,
+                                          wristWorld3D: .zero,
+                                          elbowWorld3D: .zero,
+                                          wristDepthMeters: 0.42,
+                                          elbowDepthMeters: 0.42,
+                                          widthPoints: palmScaleFinal * 0.6,
                                           direction2D: CGPoint(x: 0, y: 1))
 
             if let pose {
@@ -428,7 +425,6 @@ final class HandTracker {
                 hasLiDAR = recon.hasLiDAR
                 palmDepth = filterDepth1D(key: key, value: recon.palmDepthMeters, timestamp: timestamp)
 
-                // Auto-calibraciÃ³n del tamaÃ±o real de la mano del usuario.
                 if recon.hasLiDAR {
                     updatePalmCalibration(key: key, observed: recon.estimatedPalmMeters)
                 }
@@ -440,29 +436,31 @@ final class HandTracker {
                     jointDepths[name] = max(-filtered.z, 0.08)
                 }
 
-                // Antebrazo: suavizado One-Euro 2D del codo para que no vibre.
                 let smoothedElbow = filterArmPoint(key: key, value: recon.forearm.elbow2D, timestamp: timestamp)
-                let wDepth = jointDepths[.wrist] ?? palmDepth
-                let eDepth = recon.forearm.elbowDepthMeters
-                let elbowCam = pose.unprojectToCamera(screenPoint: smoothedElbow, depth: eDepth)
-                let wristCam = cameraJoints[.wrist] ?? pose.unprojectToCamera(screenPoint: wrist, depth: wDepth)
-                let dir = CGPoint(x: smoothedElbow.x - wrist.x, y: smoothedElbow.y - wrist.y)
+                let wristDepth = jointDepths[.wrist] ?? palmDepth
+                let elbowDepth = recon.forearm.elbowDepthMeters
+                let elbowCam = pose.unprojectToCamera(screenPoint: smoothedElbow, depth: elbowDepth)
+                let wristCam = cameraJoints[.wrist] ?? pose.unprojectToCamera(screenPoint: finalWrist,
+                                                                             depth: wristDepth)
+                let dir = CGPoint(x: smoothedElbow.x - finalWrist.x, y: smoothedElbow.y - finalWrist.y)
                 let dirLen = max(hypot(dir.x, dir.y), 0.001)
 
-                forearm = HandForearmPose(wrist2D: wrist,
-                                          midForearm2D: CGPoint(x: (wrist.x + smoothedElbow.x) * 0.5,
-                                                                y: (wrist.y + smoothedElbow.y) * 0.5),
+                forearm = HandForearmPose(wrist2D: finalWrist,
+                                          midForearm2D: CGPoint(x: (finalWrist.x + smoothedElbow.x) * 0.5,
+                                                                y: (finalWrist.y + smoothedElbow.y) * 0.5),
                                           elbow2D: smoothedElbow,
                                           wristCamera3D: wristCam,
                                           elbowCamera3D: elbowCam,
                                           wristWorld3D: pose.cameraToWorld(wristCam),
                                           elbowWorld3D: pose.cameraToWorld(elbowCam),
-                                          wristDepthMeters: wDepth,
-                                          elbowDepthMeters: eDepth,
-                                          widthPoints: palmScale * 0.60,
+                                          wristDepthMeters: wristDepth,
+                                          elbowDepthMeters: elbowDepth,
+                                          widthPoints: palmScaleFinal * 0.62,
                                           direction2D: CGPoint(x: dir.x / dirLen, y: dir.y / dirLen))
             } else {
-                palmDepth = filterDepth1D(key: key, value: Float(min(max(240.0 * 0.088 / Double(max(palmScale, 12)), 0.16), 1.40)), timestamp: timestamp)
+                palmDepth = filterDepth1D(key: key,
+                                          value: Float(min(max(240.0 * 0.095 / Double(max(palmScaleFinal, 12)), 0.16), 1.40)),
+                                          timestamp: timestamp)
                 let focal = 240.0
                 for (name, pt) in joints2D {
                     let cam3D = simd_float3(Float(pt.x - viewportSize.width * 0.5) / Float(focal) * palmDepth,
@@ -480,17 +478,13 @@ final class HandTracker {
                                             jointDepths: jointDepths,
                                             fallbackDepth: palmDepth)
             let palmNormal = Self.computePalmNormal(jointsCamera3D: cameraJoints)
-            // La cÃ¡mara mira hacia -Z. El signo del producto depende de la lateralidad
-            // (x de la imagen es simÃ©trico), asÃ­ que se normaliza con la quiralidad de Vision
-            // para que "palma hacia el telÃ©fono" sea siempre positivo.
-            let facing: Float = {
-                let chiralitySign: Float = (observation.chirality == .left) ? 1 : -1
-                return simd_dot(palmNormal, simd_float3(0, 0, 1)) * chiralitySign
-            }()
+            let chiralitySign: Float = (observation.chirality == .left) ? 1 : -1
+            let facing = simd_dot(palmNormal, simd_float3(0, 0, 1)) * chiralitySign
 
-            // 5. Gestos geomÃ©tricos.
-            let pinchPoint = CGPoint(x: (thumbFixed.x + indexFixed.x) * 0.5,
-                                     y: (thumbFixed.y + indexFixed.y) * 0.5)
+            // 6. Gestos.
+            let thumb = joints2D[.thumbTip] ?? palmCenter
+            let index = joints2D[.indexTip] ?? palmCenter
+            let pinchPoint = CGPoint(x: (thumb.x + index.x) * 0.5, y: (thumb.y + index.y) * 0.5)
             let pinchWorld3D: simd_float3 = {
                 if let t3 = worldJoints[.thumbTip], let i3 = worldJoints[.indexTip] {
                     return (t3 + i3) * 0.5
@@ -498,13 +492,11 @@ final class HandTracker {
                 return .zero
             }()
 
-            // Distancia 3D real (metros) si el LiDAR la conoce; si no, la normalizada.
-            let ratio2D = hypot(thumbFixed.x - indexFixed.x, thumbFixed.y - indexFixed.y) / palmScaleFixed
+            let ratio2D = hypot(thumb.x - index.x, thumb.y - index.y) / palmScaleFinal
             var pinch = min(max(1 - ratio2D / 0.9, 0), 1)
 
             if let t3 = cameraJoints[.thumbTip], let i3 = cameraJoints[.indexTip] {
                 let metric = simd_distance(t3, i3)
-                // Palma adulta â‰ˆ 9.5 cm -> un roce Ãºtil estÃ¡ por debajo de 2.6 cm.
                 let metricPinch = min(max(1.0 - (metric - 0.008) / 0.030, 0.0), 1.0)
                 pinch = max(pinch, CGFloat(metricPinch))
             }
@@ -512,12 +504,6 @@ final class HandTracker {
             var keyConfidence: CGFloat = 1
             for name in [VNHumanHandPoseObservation.JointName.thumbTip, .indexTip, .middleMCP, .wrist] {
                 if let point = raw[name] { keyConfidence = min(keyConfidence, CGFloat(point.confidence)) }
-            }
-
-            // Anti clics fantasma: la pinza sÃ³lo cuenta con los otros dedos recogidos o
-            // si la distancia mÃ©trica 3D es realmente corta.
-            if !otherFingersRelaxed(joints2D) && keyConfidence < 0.85 && pinch < 0.8 {
-                pinch = min(pinch, 0.25)
             }
 
             poses.append(HandPose(key: key,
@@ -538,20 +524,22 @@ final class HandTracker {
                                   palmNormalCamera3D: palmNormal,
                                   palmFacingScore: facing,
                                   confidence: keyConfidence,
-                                  palmScale: palmScaleFixed))
+                                  palmScale: palmScaleFinal))
         }
 
-        // Persistencia corta ante micro-pÃ©rdidas (sin parpadeo de la malla).
+        return persistedPoses(seen: seen, timestamp: timestamp) + poses
+    }
+
+    /// Mantiene la última pose válida durante ~0.40 s para que la malla no parpadee
+    /// ni desaparezca en micro-pérdidas (giros rápidos, puño, desenfoque de movimiento).
+    private func persistedPoses(seen: Set<String>, timestamp: CFTimeInterval) -> [HandPose] {
+        var out: [HandPose] = []
         for (key, stored) in lastPoses where !seen.contains(key) {
-            if timestamp - (lastSeen[key] ?? 0) < 0.24 {
-                poses.append(stored)
+            if timestamp - (lastSeen[key] ?? 0) < 0.40 {
+                out.append(stored)
             }
         }
-        for pose in poses where seen.contains(pose.key) {
-            lastPoses[pose.key] = pose
-            lastSeen[pose.key] = timestamp
-        }
-        for key in lastPoses.keys where timestamp - (lastSeen[key] ?? 0) > 0.45 {
+        for key in lastPoses.keys where timestamp - (lastSeen[key] ?? 0) > 0.60 {
             lastPoses[key] = nil
             lastSeen[key] = nil
             filters2D[key] = nil
@@ -559,76 +547,134 @@ final class HandTracker {
             depthFilters[key] = nil
             armFilters[key] = nil
         }
-
-        return poses
+        return out
     }
 
-    // MARK: - Completado cinemÃ¡tico de articulaciones
+    // MARK: - Completado cinemático
 
-    /// Si Vision no devuelve una articulaciÃ³n (dedo fuera del frame, oclusiÃ³n parcial),
-    /// se estima con la cadena anatÃ³mica para que la malla nunca quede mutilada.
-    private static func completeMissingJoints(_ joints: inout [VNHumanHandPoseObservation.JointName: CGPoint],
-                                              chiralityKey: String,
-                                              fallbackCenter: CGPoint) {
-        guard let wrist = joints[.wrist] else { return }
-        let palmDir: CGPoint = {
-            if let middle = joints[.middleMCP] {
-                let dx = middle.x - wrist.x
-                let dy = middle.y - wrist.y
-                let len = max(hypot(dx, dy), 0.001)
-                return CGPoint(x: dx / len, y: dy / len)
-            }
-            return CGPoint(x: 0, y: -1)
-        }()
-        let scale: CGFloat = {
-            if let middle = joints[.middleMCP] { return max(hypot(middle.x - wrist.x, middle.y - wrist.y), 12) }
-            return 34
-        }()
-
-        // Nudillos faltantes: repartidos lateralmente desde el nudillo medio.
-        let lateral = CGPoint(x: -palmDir.y, y: palmDir.x)
-        let mcpLayout: [(VNHumanHandPoseObservation.JointName, CGFloat)] = [
-            (.indexMCP, -0.52), (.middleMCP, 0.0), (.ringMCP, 0.48), (.littleMCP, 0.92)
+    /// Garantiza las 21 articulaciones **sin exigir la muñeca**. Es lo que evita que
+    /// la mano desaparezca al cerrar el puño o cuando la muñeca sale del cuadro.
+    static func completeMissingJoints(_ joints: inout [VNHumanHandPoseObservation.JointName: CGPoint],
+                                      chiralityKey: String,
+                                      fallbackCenter: CGPoint) {
+        let mcpNames: [VNHumanHandPoseObservation.JointName] = [
+            .indexMCP, .middleMCP, .ringMCP, .littleMCP
         ]
-        for (name, offset) in mcpLayout where joints[name] == nil {
-            joints[name] = CGPoint(x: wrist.x + palmDir.x * scale + lateral.x * scale * offset,
-                                   y: wrist.y + palmDir.y * scale + lateral.y * scale * offset)
+
+        if joints[.middleMCP] == nil {
+            if let index = joints[.indexMCP], let ring = joints[.ringMCP] {
+                joints[.middleMCP] = CGPoint(x: (index.x + ring.x) * 0.5,
+                                             y: (index.y + ring.y) * 0.5)
+            } else if let index = joints[.indexMCP] {
+                joints[.middleMCP] = CGPoint(x: index.x + 28, y: index.y)
+            } else if let ring = joints[.ringMCP] {
+                joints[.middleMCP] = CGPoint(x: ring.x - 28, y: ring.y)
+            } else if let little = joints[.littleMCP] {
+                joints[.middleMCP] = CGPoint(x: little.x - 55, y: little.y)
+            }
         }
 
-        // Falanges faltantes: continuaciÃ³n del hueso anterior.
+        guard let middleMCP = joints[.middleMCP] ?? mcpNames.compactMap({ joints[$0] }).first else {
+            if joints.isEmpty { joints[.wrist] = fallbackCenter }
+            return
+        }
+
+        let breadth: CGFloat = {
+            if let index = joints[.indexMCP], let little = joints[.littleMCP] {
+                let d = hypot(index.x - little.x, index.y - little.y)
+                if d > 8 { return d / 0.90 }
+            }
+            return 46
+        }()
+
+        // Dirección hacia los dedos: se ignoran los dedos doblados (puño).
+        var fingerDirSum = CGPoint.zero
+        var fingerDirCount = 0
+        let fingerPairs: [(VNHumanHandPoseObservation.JointName,
+                           VNHumanHandPoseObservation.JointName)] = [
+            (.indexMCP, .indexTip), (.middleMCP, .middleTip),
+            (.ringMCP, .ringTip), (.littleMCP, .littleTip)
+        ]
+        for (mcpName, tipName) in fingerPairs {
+            guard let m = joints[mcpName], let t = joints[tipName] else { continue }
+            let dx = t.x - m.x
+            let dy = t.y - m.y
+            let len = hypot(dx, dy)
+            guard len > breadth * 0.22 else { continue }
+            fingerDirSum.x += dx / len
+            fingerDirSum.y += dy / len
+            fingerDirCount += 1
+        }
+
+        var fingerDir: CGPoint
+        if fingerDirCount > 0 {
+            fingerDir = normalize(CGPoint(x: fingerDirSum.x / CGFloat(fingerDirCount),
+                                          y: fingerDirSum.y / CGFloat(fingerDirCount)),
+                                  fallback: CGPoint(x: 0, y: -1))
+        } else if let wrist = joints[.wrist] {
+            fingerDir = normalize(CGPoint(x: middleMCP.x - wrist.x, y: middleMCP.y - wrist.y),
+                                  fallback: CGPoint(x: 0, y: -1))
+        } else {
+            fingerDir = CGPoint(x: 0, y: -1)
+        }
+
+        if joints[.wrist] == nil {
+            joints[.wrist] = CGPoint(x: middleMCP.x - fingerDir.x * breadth,
+                                     y: middleMCP.y - fingerDir.y * breadth)
+        }
+        guard let wrist = joints[.wrist] else { return }
+
+        let palmDir = normalize(CGPoint(x: middleMCP.x - wrist.x, y: middleMCP.y - wrist.y),
+                                fallback: fingerDir)
+        let palmLength = max(hypot(middleMCP.x - wrist.x, middleMCP.y - wrist.y), breadth * 0.5)
+        let lateral = CGPoint(x: -palmDir.y, y: palmDir.x)
+
+        let mcpLayout: [(VNHumanHandPoseObservation.JointName, CGFloat)] = [
+            (.indexMCP, -0.44), (.middleMCP, 0.0), (.ringMCP, 0.40), (.littleMCP, 0.80)
+        ]
+        for (name, offset) in mcpLayout where joints[name] == nil {
+            joints[name] = CGPoint(x: wrist.x + palmDir.x * palmLength + lateral.x * breadth * offset,
+                                   y: wrist.y + palmDir.y * palmLength + lateral.y * breadth * offset)
+        }
+
         let chains: [[(VNHumanHandPoseObservation.JointName, CGFloat)]] = [
-            [(.thumbCMC, 0.40), (.thumbMP, 0.42), (.thumbIP, 0.34), (.thumbTip, 0.30)],
-            [(.indexMCP, 1.00), (.indexPIP, 0.52), (.indexDIP, 0.30), (.indexTip, 0.24)],
-            [(.middleMCP, 1.00), (.middlePIP, 0.56), (.middleDIP, 0.32), (.middleTip, 0.26)],
-            [(.ringMCP, 1.00), (.ringPIP, 0.52), (.ringDIP, 0.30), (.ringTip, 0.24)],
-            [(.littleMCP, 1.00), (.littlePIP, 0.42), (.littleDIP, 0.26), (.littleTip, 0.22)]
+            [(.thumbCMC, 0.36), (.thumbMP, 0.34), (.thumbIP, 0.28), (.thumbTip, 0.24)],
+            [(.indexMCP, 1.00), (.indexPIP, 0.50), (.indexDIP, 0.28), (.indexTip, 0.22)],
+            [(.middleMCP, 1.00), (.middlePIP, 0.53), (.middleDIP, 0.29), (.middleTip, 0.23)],
+            [(.ringMCP, 1.00), (.ringPIP, 0.49), (.ringDIP, 0.27), (.ringTip, 0.22)],
+            [(.littleMCP, 1.00), (.littlePIP, 0.40), (.littleDIP, 0.23), (.littleTip, 0.19)]
         ]
 
         for chain in chains {
-            var previousPoint = wrist
-            for (name, ratio) in chain {
+            var previous: CGPoint = (chain.first?.0 == .thumbCMC) ? wrist : (joints[chain[0].0] ?? wrist)
+            for (index, entry) in chain.enumerated() {
+                let (name, ratio) = entry
                 if let existing = joints[name] {
-                    previousPoint = existing
+                    previous = existing
                     continue
                 }
-                let step = max(scale * ratio, 6)
-                joints[name] = CGPoint(x: previousPoint.x + palmDir.x * step,
-                                       y: previousPoint.y + palmDir.y * step)
-                previousPoint = joints[name]!
+                let step = max(palmLength * ratio, 6)
+                let spread = (CGFloat(index) - 1.5) * 0.05
+                let direction = normalize(CGPoint(x: palmDir.x + lateral.x * spread,
+                                                  y: palmDir.y + lateral.y * spread),
+                                          fallback: palmDir)
+                let point = CGPoint(x: previous.x + direction.x * step,
+                                    y: previous.y + direction.y * step)
+                joints[name] = point
+                previous = point
             }
-        }
-
-        // Si tras completar sigue sin haber muÃ±eca utilizable, usar el centro de respaldo.
-        if joints.isEmpty {
-            joints[.wrist] = fallbackCenter
         }
     }
 
-    // MARK: - EstabilizaciÃ³n esqueletal
+    private static func normalize(_ p: CGPoint, fallback: CGPoint) -> CGPoint {
+        let len = hypot(p.x, p.y)
+        guard len > 1e-4 else { return fallback }
+        return CGPoint(x: p.x / len, y: p.y / len)
+    }
 
-    /// Un hueso no puede medir en pantalla mÃ¡s de lo que mide en la realidad.
-    /// Los artefactos tÃ­picos de Vision (un dedo que salta a otro punto de la mano)
-    /// desaparecen con esta restricciÃ³n.
+    // MARK: - Estabilización esqueletal
+
+    /// Ningún hueso puede medir en pantalla más de lo que mide de verdad.
     static func enforceMaxBoneLengths(_ joints: inout [VNHumanHandPoseObservation.JointName: CGPoint],
                                       palmScale: CGFloat) {
         guard palmScale > 4 else { return }
@@ -637,15 +683,14 @@ final class HandTracker {
             let dx = child.x - parent.x
             let dy = child.y - parent.y
             let length = hypot(dx, dy)
-            let maxLength = palmScale * CGFloat(link.ratio) * 1.28
+            let maxLength = palmScale * CGFloat(link.ratio) * 1.30
             guard maxLength > 1, length > maxLength else { continue }
             let k = maxLength / length
             joints[link.child] = CGPoint(x: parent.x + dx * k, y: parent.y + dy * k)
         }
     }
 
-    /// Con la palma quieta, un salto grande de una articulaciÃ³n es ruido de Vision,
-    /// no movimiento: se conserva el frame anterior.
+    /// Rechaza saltos imposibles: la articulación se movió mucho más que la palma.
     static func rejectOutliers(_ joints: inout [VNHumanHandPoseObservation.JointName: CGPoint],
                                previous: HandPose?,
                                palmCenter: CGPoint,
@@ -653,11 +698,13 @@ final class HandTracker {
         guard let previous, palmScale > 4 else { return }
         let palmMoved = hypot(palmCenter.x - previous.palmCenter.x,
                               palmCenter.y - previous.palmCenter.y)
-        guard palmMoved < palmScale * 0.18 else { return }
+        // Si la mano entera se desplazó, el movimiento de un dedo es real.
+        guard palmMoved < palmScale * 0.35 else { return }
 
         for name in Array(joints.keys) {
             guard let prev = previous.joints[name], let current = joints[name] else { continue }
-            if hypot(current.x - prev.x, current.y - prev.y) > palmScale * 0.55 {
+            let moved = hypot(current.x - prev.x, current.y - prev.y)
+            if moved > palmScale * 0.80 && moved > palmMoved * 3.0 {
                 joints[name] = prev
             }
         }
@@ -675,9 +722,9 @@ final class HandTracker {
         }
     }
 
-    private static func points(named names: [VNHumanBodyPoseObservation.JointName],
-                               in pts: [VNHumanBodyPoseObservation.JointName: VNRecognizedPoint],
-                               projector: ImageProjector) -> [CGPoint] {
+    private static func collect(_ names: [VNHumanBodyPoseObservation.JointName],
+                                from pts: [VNHumanBodyPoseObservation.JointName: VNRecognizedPoint],
+                                projector: ImageProjector) -> [CGPoint] {
         var out: [CGPoint] = []
         for name in names {
             guard let p = pts[name], p.confidence > 0.20 else { continue }
@@ -686,19 +733,14 @@ final class HandTracker {
         return out
     }
 
-    /// Punto de referencia cuando falta una articulación clave.
-    private func palmCenterFallback(wrist: CGPoint, middle: CGPoint) -> CGPoint {
-        CGPoint(x: (wrist.x + middle.x) * 0.5, y: (wrist.y + middle.y) * 0.5)
-    }
-
-    private static func closestPoint(to target: CGPoint, in candidates: [CGPoint], maxDistance: CGFloat) -> CGPoint? {
+    private static func closest(to target: CGPoint, in candidates: [CGPoint], maxDistance: CGFloat) -> CGPoint? {
         var best: CGPoint?
-        var bestDist = maxDistance
-        for c in candidates {
-            let d = hypot(c.x - target.x, c.y - target.y)
-            if d < bestDist {
-                bestDist = d
-                best = c
+        var bestDistance = maxDistance
+        for candidate in candidates {
+            let d = hypot(candidate.x - target.x, candidate.y - target.y)
+            if d < bestDistance {
+                bestDistance = d
+                best = candidate
             }
         }
         return best
@@ -722,10 +764,15 @@ final class HandTracker {
             let len = simd_length(diff)
             let dir = len > 0.0001 ? (diff / len) : upRef
             let rot = simd_quatf(from: upRef, to: dir)
-            let avgDepth = ((jointDepths[def.parent] ?? fallbackDepth) + (jointDepths[def.child] ?? fallbackDepth)) * 0.5
-            result.append(HandBonePose3D(definition: def, start2D: p0, end2D: p1,
-                                         startCamera3D: c0, endCamera3D: c1,
-                                         rotation3D: rot, depthMeters: avgDepth))
+            let avgDepth = ((jointDepths[def.parent] ?? fallbackDepth)
+                            + (jointDepths[def.child] ?? fallbackDepth)) * 0.5
+            result.append(HandBonePose3D(definition: def,
+                                         start2D: p0,
+                                         end2D: p1,
+                                         startCamera3D: c0,
+                                         endCamera3D: c1,
+                                         rotation3D: rot,
+                                         depthMeters: avgDepth))
         }
         return result
     }
@@ -816,25 +863,10 @@ final class HandTracker {
         }
         return extended >= 4
     }
-
-    private func otherFingersRelaxed(_ joints: [VNHumanHandPoseObservation.JointName: CGPoint]) -> Bool {
-        guard let wrist = joints[.wrist] else { return false }
-        let pairs: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
-            (.middleTip, .middleMCP), (.ringTip, .ringMCP), (.littleTip, .littleMCP)
-        ]
-        var curled = 0
-        for (tipName, mcpName) in pairs {
-            guard let tip = joints[tipName], let mcp = joints[mcpName] else { continue }
-            let tipDistance = hypot(tip.x - wrist.x, tip.y - wrist.y)
-            let mcpDistance = max(hypot(mcp.x - wrist.x, mcp.y - wrist.y), 1)
-            if tipDistance / mcpDistance < 1.22 { curled += 1 }
-        }
-        return curled == 3
-    }
 }
 
 /// Pasa puntos normalizados de Vision (imagen ya parada, origen abajo-izquierda)
-/// a coordenadas de pantalla con recorte "aspect fill", igual que la cÃ¡mara.
+/// a coordenadas de pantalla con recorte "aspect fill", igual que la cámara.
 struct ImageProjector {
     let viewportSize: CGSize
     var imageAspect: CGFloat = 3.0 / 4.0
