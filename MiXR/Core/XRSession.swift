@@ -36,7 +36,7 @@ final class XRSession: NSObject, ObservableObject {
     /// Autofoco normal de la camara. Bloquearlo dejaba la lente clavada al fondo.
     @Published var autofocusEnabled = true
     /// Mano fantasma (segmentación) en vez de la malla sintética.
-    @Published var ghostHandEnabled = false
+    @Published var ghostHandEnabled = true
 
     var framingName: String {
         switch framing {
@@ -176,7 +176,7 @@ final class XRSession: NSObject, ObservableObject {
 
         hostView.session = self
         overlay.isUserInteractionEnabled = false
-        overlay.showsSkeleton = true
+        overlay.showsSkeleton = false
 
         stereoRoot.frame = view.bounds
         stereoRoot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -357,7 +357,7 @@ final class XRSession: NSObject, ObservableObject {
             ghostMissCount = 0
             if autoMeshFallback {
                 autoMeshFallback = false
-                overlay.showsSkeleton = true
+                overlay.showsSkeleton = false
             }
             return
         }
@@ -366,7 +366,7 @@ final class XRSession: NSObject, ObservableObject {
         ghostMissCount += 1
         if ghostMissCount > 90, !autoMeshFallback {
             autoMeshFallback = true
-            overlay.showsSkeleton = true
+            overlay.showsSkeleton = false
         }
     }
 
@@ -764,7 +764,8 @@ final class XRSession: NSObject, ObservableObject {
             ghostView.update(buffer: frame.capturedImage,
                              hands: lastHands,
                              orientation: orientation,
-                             segmentationBuffer: inferenceBuffer)
+                             segmentationBuffer: inferenceBuffer,
+                             depthMap: depthData?.depthMap)
         }
         updateGhostFallback()
 

@@ -52,6 +52,8 @@ final class HandGhostView: UIView {
     private var orientation: UIInterfaceOrientation = .landscapeRight
 
     private var personMask: CVPixelBuffer?
+    /// Mapa de profundidad del LiDAR: permite recortar la mano de verdad.
+    private var depthMap: CVPixelBuffer?
     private var lastSegmentationAt: CFTimeInterval = 0
     private var segmentationBusy = false
 
@@ -107,10 +109,12 @@ final class HandGhostView: UIView {
     func update(buffer: CVPixelBuffer?,
                 hands: [HandPose],
                 orientation: UIInterfaceOrientation,
-                segmentationBuffer: CVPixelBuffer? = nil) {
+                segmentationBuffer: CVPixelBuffer? = nil,
+                depthMap: CVPixelBuffer? = nil) {
         self.buffer = buffer
         self.hands = hands
         self.orientation = orientation
+        self.depthMap = depthMap
 
         // La segmentación usa la imagen reducida (4x menos píxeles) pero el color que
         // se compone es el frame completo, así la mano no pierde nitidez.
@@ -120,7 +124,7 @@ final class HandGhostView: UIView {
             personMask = nil
         }
 
-        if hands.isEmpty && personMask == nil {
+        if hands.isEmpty && personMask == nil && depthMap == nil {
             imageLayer.contents = nil
             return
         }
@@ -222,27 +226,43 @@ final class HandGhostView: UIView {
         let framed = aspectFill(source, into: rect)
 
         // --- Máscara ---
-        // Si la segmentación encuentra la persona, se usa **sólo ella**: es la forma real
-        // de la mano y del antebrazo. Unirla con la silueta geométrica (cápsulas) hacía
-        // que ganaran las cápsulas, con dedos rectos y todos del mismo ancho.
+        // Prioridad:
+        //  1. Segmentación de persona (si el modelo la encuentra).
+        //  2. **Profundidad del LiDAR**: recorta los píxeles que están a la distancia de
+        //     la mano. Esto devuelve la mano REAL (con nudillos, piel y contorno exacto),
+        //     que es lo único que se parece a la referencia.
+        //  3. Silueta geométrica, como último respaldo.
         var mask: CIImage?
+        var usingRealPixels = false
         let personIsUsable = personMask != nil && maskCoverage > 0.008
+        var regionMask: CIImage?
+
+        if let geometric = geometricMask(hands: hands, size: size) {
+            regionMask = CIImage(cgImage: geometric)
+                .transformed(by: CGAffineTransform(scaleX: 1 / Self.maskScale,
+                                                   y: 1 / Self.maskScale))
+                .applyingFilter("CIMorphologyMaximum", parameters: [kCIInputRadiusKey: 8])
+                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 6])
+                .cropped(to: rect)
+        }
 
         if let personMask, personIsUsable {
             var person = CIImage(cvPixelBuffer: personMask).oriented(forExifOrientation: exif)
             person = person.transformed(by: CGAffineTransform(translationX: -person.extent.origin.x,
                                                               y: -person.extent.origin.y))
-            // Cerrar huecos chicos y suavizar el borde del modelo.
             mask = aspectFill(person, into: rect)
                 .applyingFilter("CIMorphologyMaximum", parameters: [kCIInputRadiusKey: 1.4])
                 .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 2.2])
                 .cropped(to: rect)
-        } else if let geometric = geometricMask(hands: hands, size: size) {
-            mask = CIImage(cgImage: geometric)
-                .transformed(by: CGAffineTransform(scaleX: 1 / Self.maskScale,
-                                                   y: 1 / Self.maskScale))
-                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 2.4])
-                .cropped(to: rect)
+            usingRealPixels = true
+        } else if let depthMask = depthBasedMask(hands: hands,
+                                                 orientation: orientation,
+                                                 rect: rect,
+                                                 region: regionMask) {
+            mask = depthMask
+            usingRealPixels = true
+        } else if let regionMask {
+            mask = regionMask
         }
 
         guard var finalMask = mask else { return nil }
@@ -256,17 +276,23 @@ final class HandGhostView: UIView {
 
         let solidMask = finalMask.cropped(to: rect)
 
-        // --- Mano: gris oscuro translúcido sobre la imagen ---
-        // El color se mezcla con la imagen original al `fillStrength`: sobre un panel
-        // negro queda una silueta oscura; sobre el mundo real, un tinte oscuro.
+        // --- Mano: si la máscara es real (LiDAR/persona) se usan los PÍXELES REALES,
+        //     ligeramente aclarados; si es geométrica, un relleno oscuro uniforme. ---
         let light = CIImage(color: CIColor(red: Self.fillRed,
                                            green: Self.fillGreen,
                                            blue: Self.fillBlue,
                                            alpha: Self.fillStrength))
             .cropped(to: rect)
-        let handFill = light.applyingFilter("CISourceOverCompositing", parameters: [
+        let tinted = light.applyingFilter("CISourceOverCompositing", parameters: [
             kCIInputBackgroundImageKey: framed
         ])
+        let handFill = usingRealPixels
+            ? framed.applyingFilter("CIColorControls", parameters: [
+                kCIInputBrightnessKey: 0.06,
+                kCIInputContrastKey: 1.06,
+                kCIInputSaturationKey: 0.9
+            ])
+            : tinted
 
         // Alfa parcial horneado en la máscara (evita líos de premultiplicado).
         let scaledMask = solidMask.applyingFilter("CIColorMatrix", parameters: [
@@ -365,6 +391,44 @@ final class HandGhostView: UIView {
         }
 
         return total > 0 ? Float(hits) / Float(total) : 0
+    }
+
+    /// Máscara por **profundidad del LiDAR**: toma los píxeles que están a la distancia
+    /// de la mano (dentro de la región de la silueta). Devuelve la mano real, con sus
+    /// nudillos y su contorno exacto — que es lo que hace la app de referencia.
+    private func depthBasedMask(hands: [HandPose],
+                                orientation: UIInterfaceOrientation,
+                                rect: CGRect,
+                                region: CIImage?) -> CIImage? {
+        guard let depthMap, let hand = hands.first, let region else { return nil }
+        let handDepth = hand.depthMeters
+        guard handDepth > 0.15, handDepth < 2.0 else { return nil }
+
+        let exif = Int32(ScreenOrientation.visionOrientation(for: orientation).rawValue)
+        var depth = CIImage(cvPixelBuffer: depthMap).oriented(forExifOrientation: exif)
+        depth = depth.transformed(by: CGAffineTransform(translationX: -depth.extent.origin.x,
+                                                        y: -depth.extent.origin.y))
+        guard depth.extent.width > 1 else { return nil }
+        let framedDepth = aspectFill(depth, into: rect)
+
+        // máscara = clamp((limite - profundidad) / suavidad) → 1 donde está más cerca
+        let softness: CGFloat = 0.06
+        let limit = CGFloat(handDepth) + 0.14
+        let gain = 1.0 / softness
+        let bias = limit * gain
+
+        let near = framedDepth.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: -gain, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: -gain, y: 0, z: 0, w: 0),
+            "inputBVector": CIVector(x: -gain, y: 0, z: 0, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputBiasVector": CIVector(x: bias, y: bias, z: bias, w: 1)
+        ]).applyingFilter("CIColorClamp")
+
+        return near
+            .applyingFilter("CIMultiplyBlendMode", parameters: [kCIInputBackgroundImageKey: region])
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 1.4])
+            .cropped(to: rect)
     }
 
     private func aspectFill(_ image: CIImage, into rect: CGRect) -> CIImage {        let imageWidth = image.extent.width
