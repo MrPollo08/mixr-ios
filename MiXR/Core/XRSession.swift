@@ -35,7 +35,7 @@ final class XRSession: NSObject, ObservableObject {
     /// Autofoco continuo (true) o enfoque bloqueado (false).
     @Published var autofocusEnabled = true
     /// Mano fantasma (segmentación) en vez de la malla sintética.
-    @Published var ghostHandEnabled = true
+    @Published var ghostHandEnabled = false
 
     var framingName: String {
         switch framing {
@@ -160,6 +160,7 @@ final class XRSession: NSObject, ObservableObject {
         camera.layer.zPosition = 2
         vignette.layer.zPosition = 50
         hostView.layer.zPosition = 100
+        ghostView.isHidden = !ghostHandEnabled
         occluderView.layer.zPosition = 800
         ghostView.layer.zPosition = 900
         overlay.layer.zPosition = 1000
@@ -172,7 +173,7 @@ final class XRSession: NSObject, ObservableObject {
 
         hostView.session = self
         overlay.isUserInteractionEnabled = false
-        overlay.showsSkeleton = false
+        overlay.showsSkeleton = true
 
         stereoRoot.frame = view.bounds
         stereoRoot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -353,7 +354,7 @@ final class XRSession: NSObject, ObservableObject {
             ghostMissCount = 0
             if autoMeshFallback {
                 autoMeshFallback = false
-                overlay.showsSkeleton = false
+                overlay.showsSkeleton = true
             }
             return
         }

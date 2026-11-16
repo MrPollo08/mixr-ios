@@ -202,30 +202,30 @@ final class HandTracker {
 
     /// Radios anatómicos medidos sobre una mano adulta (fracción de la palma).
     static let boneDefinitions: [HandBoneDefinition] = [
-        HandBoneDefinition(parent: .wrist, child: .thumbCMC, fingerIndex: 0, segmentIndex: 0, radiusStartRatio: 0.150, radiusEndRatio: 0.138),
-        HandBoneDefinition(parent: .thumbCMC, child: .thumbMP, fingerIndex: 0, segmentIndex: 1, radiusStartRatio: 0.138, radiusEndRatio: 0.126),
-        HandBoneDefinition(parent: .thumbMP, child: .thumbIP, fingerIndex: 0, segmentIndex: 2, radiusStartRatio: 0.126, radiusEndRatio: 0.114),
-        HandBoneDefinition(parent: .thumbIP, child: .thumbTip, fingerIndex: 0, segmentIndex: 3, radiusStartRatio: 0.114, radiusEndRatio: 0.103),
+        HandBoneDefinition(parent: .wrist, child: .thumbCMC, fingerIndex: 0, segmentIndex: 0, radiusStartRatio: 0.177, radiusEndRatio: 0.163),
+        HandBoneDefinition(parent: .thumbCMC, child: .thumbMP, fingerIndex: 0, segmentIndex: 1, radiusStartRatio: 0.163, radiusEndRatio: 0.149),
+        HandBoneDefinition(parent: .thumbMP, child: .thumbIP, fingerIndex: 0, segmentIndex: 2, radiusStartRatio: 0.149, radiusEndRatio: 0.135),
+        HandBoneDefinition(parent: .thumbIP, child: .thumbTip, fingerIndex: 0, segmentIndex: 3, radiusStartRatio: 0.135, radiusEndRatio: 0.122),
 
-        HandBoneDefinition(parent: .wrist, child: .indexMCP, fingerIndex: 1, segmentIndex: 0, radiusStartRatio: 0.132, radiusEndRatio: 0.124),
-        HandBoneDefinition(parent: .indexMCP, child: .indexPIP, fingerIndex: 1, segmentIndex: 1, radiusStartRatio: 0.124, radiusEndRatio: 0.115),
-        HandBoneDefinition(parent: .indexPIP, child: .indexDIP, fingerIndex: 1, segmentIndex: 2, radiusStartRatio: 0.115, radiusEndRatio: 0.106),
-        HandBoneDefinition(parent: .indexDIP, child: .indexTip, fingerIndex: 1, segmentIndex: 3, radiusStartRatio: 0.106, radiusEndRatio: 0.096),
+        HandBoneDefinition(parent: .wrist, child: .indexMCP, fingerIndex: 1, segmentIndex: 0, radiusStartRatio: 0.156, radiusEndRatio: 0.146),
+        HandBoneDefinition(parent: .indexMCP, child: .indexPIP, fingerIndex: 1, segmentIndex: 1, radiusStartRatio: 0.146, radiusEndRatio: 0.136),
+        HandBoneDefinition(parent: .indexPIP, child: .indexDIP, fingerIndex: 1, segmentIndex: 2, radiusStartRatio: 0.136, radiusEndRatio: 0.125),
+        HandBoneDefinition(parent: .indexDIP, child: .indexTip, fingerIndex: 1, segmentIndex: 3, radiusStartRatio: 0.125, radiusEndRatio: 0.113),
 
-        HandBoneDefinition(parent: .wrist, child: .middleMCP, fingerIndex: 2, segmentIndex: 0, radiusStartRatio: 0.140, radiusEndRatio: 0.131),
-        HandBoneDefinition(parent: .middleMCP, child: .middlePIP, fingerIndex: 2, segmentIndex: 1, radiusStartRatio: 0.131, radiusEndRatio: 0.121),
-        HandBoneDefinition(parent: .middlePIP, child: .middleDIP, fingerIndex: 2, segmentIndex: 2, radiusStartRatio: 0.121, radiusEndRatio: 0.112),
-        HandBoneDefinition(parent: .middleDIP, child: .middleTip, fingerIndex: 2, segmentIndex: 3, radiusStartRatio: 0.112, radiusEndRatio: 0.102),
+        HandBoneDefinition(parent: .wrist, child: .middleMCP, fingerIndex: 2, segmentIndex: 0, radiusStartRatio: 0.165, radiusEndRatio: 0.155),
+        HandBoneDefinition(parent: .middleMCP, child: .middlePIP, fingerIndex: 2, segmentIndex: 1, radiusStartRatio: 0.155, radiusEndRatio: 0.143),
+        HandBoneDefinition(parent: .middlePIP, child: .middleDIP, fingerIndex: 2, segmentIndex: 2, radiusStartRatio: 0.143, radiusEndRatio: 0.132),
+        HandBoneDefinition(parent: .middleDIP, child: .middleTip, fingerIndex: 2, segmentIndex: 3, radiusStartRatio: 0.132, radiusEndRatio: 0.120),
 
-        HandBoneDefinition(parent: .wrist, child: .ringMCP, fingerIndex: 3, segmentIndex: 0, radiusStartRatio: 0.128, radiusEndRatio: 0.120),
-        HandBoneDefinition(parent: .ringMCP, child: .ringPIP, fingerIndex: 3, segmentIndex: 1, radiusStartRatio: 0.120, radiusEndRatio: 0.112),
-        HandBoneDefinition(parent: .ringPIP, child: .ringDIP, fingerIndex: 3, segmentIndex: 2, radiusStartRatio: 0.112, radiusEndRatio: 0.103),
-        HandBoneDefinition(parent: .ringDIP, child: .ringTip, fingerIndex: 3, segmentIndex: 3, radiusStartRatio: 0.103, radiusEndRatio: 0.094),
+        HandBoneDefinition(parent: .wrist, child: .ringMCP, fingerIndex: 3, segmentIndex: 0, radiusStartRatio: 0.151, radiusEndRatio: 0.142),
+        HandBoneDefinition(parent: .ringMCP, child: .ringPIP, fingerIndex: 3, segmentIndex: 1, radiusStartRatio: 0.142, radiusEndRatio: 0.132),
+        HandBoneDefinition(parent: .ringPIP, child: .ringDIP, fingerIndex: 3, segmentIndex: 2, radiusStartRatio: 0.132, radiusEndRatio: 0.122),
+        HandBoneDefinition(parent: .ringDIP, child: .ringTip, fingerIndex: 3, segmentIndex: 3, radiusStartRatio: 0.122, radiusEndRatio: 0.111),
 
-        HandBoneDefinition(parent: .wrist, child: .littleMCP, fingerIndex: 4, segmentIndex: 0, radiusStartRatio: 0.114, radiusEndRatio: 0.106),
-        HandBoneDefinition(parent: .littleMCP, child: .littlePIP, fingerIndex: 4, segmentIndex: 1, radiusStartRatio: 0.106, radiusEndRatio: 0.097),
-        HandBoneDefinition(parent: .littlePIP, child: .littleDIP, fingerIndex: 4, segmentIndex: 2, radiusStartRatio: 0.097, radiusEndRatio: 0.089),
-        HandBoneDefinition(parent: .littleDIP, child: .littleTip, fingerIndex: 4, segmentIndex: 3, radiusStartRatio: 0.089, radiusEndRatio: 0.082)
+        HandBoneDefinition(parent: .wrist, child: .littleMCP, fingerIndex: 4, segmentIndex: 0, radiusStartRatio: 0.135, radiusEndRatio: 0.125),
+        HandBoneDefinition(parent: .littleMCP, child: .littlePIP, fingerIndex: 4, segmentIndex: 1, radiusStartRatio: 0.125, radiusEndRatio: 0.114),
+        HandBoneDefinition(parent: .littlePIP, child: .littleDIP, fingerIndex: 4, segmentIndex: 2, radiusStartRatio: 0.114, radiusEndRatio: 0.105),
+        HandBoneDefinition(parent: .littleDIP, child: .littleTip, fingerIndex: 4, segmentIndex: 3, radiusStartRatio: 0.105, radiusEndRatio: 0.097)
     ]
 
     private let queue = DispatchQueue(label: "mixr.hand-tracker", qos: .userInteractive)
