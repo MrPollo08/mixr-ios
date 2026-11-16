@@ -54,6 +54,7 @@ final class HandGhostView: UIView {
 
     /// Diagnóstico
     private(set) var segmentationCount = 0
+    private(set) var maskSizeText = "-"
     var hasMask: Bool { personMask != nil }
     var hasContent: Bool { imageLayer.contents != nil }
 
@@ -143,6 +144,12 @@ final class HandGhostView: UIView {
                 if let result = self.segmentation.results?.first {
                     self.personMask = result.pixelBuffer
                     self.segmentationCount += 1
+                    let w = CVPixelBufferGetWidth(result.pixelBuffer)
+                    let h = CVPixelBufferGetHeight(result.pixelBuffer)
+                    let text = "\(w)x\(h)"
+                    DispatchQueue.main.async {
+                        if self.maskSizeText != text { self.maskSizeText = text }
+                    }
                 }
             } catch {
                 self.personMask = nil

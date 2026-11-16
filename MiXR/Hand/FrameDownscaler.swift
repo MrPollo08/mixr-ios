@@ -47,9 +47,17 @@ final class FrameDownscaler {
               let output else { return nil }
 
         let image = CIImage(cvPixelBuffer: source)
-        context.render(image,
+        let extent = image.extent
+        guard extent.width > 1, extent.height > 1 else { return nil }
+
+        // Se escala la imagen explícitamente al tamaño destino y se renderiza su extent.
+        // (Pasar otra cosa en `bounds` hace que Core Image **recorte** en vez de reducir.)
+        let sx = target.width / extent.width
+        let sy = target.height / extent.height
+        let scaled = image.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
+        context.render(scaled,
                        to: output,
-                       bounds: CGRect(origin: .zero, size: target),
+                       bounds: scaled.extent,
                        colorSpace: colorSpace)
 
         return output
