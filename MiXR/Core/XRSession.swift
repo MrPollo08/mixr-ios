@@ -92,6 +92,9 @@ final class XRSession: NSObject, ObservableObject {
     private lazy var datasetServer = DatasetHTTPServer(recorder: recorder)
     private let volumeButtons = VolumeButtons()
     @Published var captureMode = false
+    @Published var captureStatus = ""
+    @Published var showsCapturePanel = false
+    @Published var captureURLText = ""
 
     private var displayLink: CADisplayLink?
     private var isRunning = false
@@ -221,6 +224,31 @@ final class XRSession: NSObject, ObservableObject {
     private func restoreNormalControls() {
         gamepad.onPrimary = { [weak self] in self?.connectPC() }
         gamepad.onSecondary = { [weak self] in self?.centerWindows() }
+    }
+
+    /// Botones del panel (también sirven por si no hay mando).
+    func toggleRecording() {
+        recorder.toggleRecording()
+        refreshCaptureStatus()
+    }
+
+    func nextGestureLabel() {
+        recorder.nextLabel()
+        refreshCaptureStatus()
+    }
+
+    func clearCaptureDataset() {
+        recorder.clearDataset()
+        refreshCaptureStatus()
+    }
+
+    private func refreshCaptureStatus() {
+        captureStatus = recorder.statusText
+        if let ip = LocalIP.wifiAddress() {
+            captureURLText = "http://\(ip):47320/dataset.csv"
+        } else {
+            captureURLText = "sin Wi-Fi"
+        }
     }
 
     /// Si la mano fantasma no logra dibujar nada durante ~1,5 s aunque haya mano
@@ -775,10 +803,11 @@ final class XRSession: NSObject, ObservableObject {
 
         if captureMode {
             var extra = "\n" + recorder.statusText
-            if let ip = LocalIP.wifiAddress() {
-                extra += "\nhttp://\(ip):47320/dataset.csv"
+            if !captureURLText.isEmpty {
+                extra += "\n" + captureURLText
             }
             if debugText != text + extra { debugText = text + extra }
+            if captureStatus != recorder.statusText { captureStatus = recorder.statusText }
         }
     }
 
