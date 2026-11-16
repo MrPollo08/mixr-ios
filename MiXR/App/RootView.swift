@@ -53,6 +53,9 @@ struct RootView: View {
                 action("Monitor PC", symbol: "display", filled: true) {
                     session.connectPC()
                 }
+                action("Menú 3D", symbol: "square.grid.2x2", filled: false) {
+                    session.toggleFloatingMenu()
+                }
                 action("Fijar en mesa", symbol: "square.dashed", filled: false) {
                     session.snapMonitorToSurface()
                 }
@@ -83,7 +86,7 @@ struct RootView: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.white.opacity(0.75))
 
-            Text("Manos \(session.handCount) · pinza en el borde = mover · dos pinzas = tamaño")
+            Text("Manos \(session.handCount) · \(session.handDepthText) · 6DoF+Gyro · pinza borde = mover 3D")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundColor(.white.opacity(0.55))
         }

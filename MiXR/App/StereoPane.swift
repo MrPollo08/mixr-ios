@@ -29,6 +29,12 @@ final class StereoPane: UIView {
         stage.addSubview(host)
         stage.addSubview(overlay)
 
+        background.layer.zPosition = 0
+        environmentView.layer.zPosition = 10
+        host.layer.zPosition = 100
+        overlay.layer.zPosition = 900
+        vignette.zPosition = 1000
+
         // Viñeta: oscurece los bordes, como la lente del visor.
         vignette.type = .radial
         vignette.colors = [

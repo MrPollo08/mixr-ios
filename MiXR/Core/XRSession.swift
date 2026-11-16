@@ -7,20 +7,26 @@ import UIKit
 import Vision
 import simd
 
-/// Dreamspace (monitor): un monitor grande de la PC clavado en el mundo real.
+/// Pipeline híbrido XR para iPhone + Caja VR:
 ///
-/// - ARKit 6DoF (una sola cámara: sin cambios, sin parpadeo).
-/// - «Ver más»: muestra más campo de la cámara (zoom out por software) para que
-///   el cuarto se sienta lejos y no "pegado a la cara".
-/// - «Fijar en mesa»: escanea el plano y deja el monitor anclado ahí (ARAnchor).
-/// - «Guardar lugar»: ARWorldMap + coordenadas; al volver, aparece solo.
-/// - Manos: pinza en el borde = mover · dos pinzas = tamaño.
+/// 1. **ARKit 6DoF + Giroscopio (`HybridHeadTracker`)**: posicionamiento en 6 grados
+///    de libertad fusionado con CoreMotion a 100 Hz para rotación de baja latencia.
+/// 2. **Apple Vision (21 puntos) + Sensor LiDAR (`sceneDepth`) + Filtro One-Euro 3D**:
+///    seguimiento asíncrono de manos en espacio 3D real (metros) que articula los
+///    19 huesos de la malla low-poly con auto-oclusión y fade en la muñeca.
+/// 3. **Capas de renderizado (Overlay UI)**:
+///    - `z = 0`: Escenario / Passthrough de cámara.
+///    - `z = 100`: Monitores y ventanas 3D ancladas al mundo (`ARAnchor`).
+///    - `z = 500`: Menús flotantes (Overlay UI) siempre visibles sobre el escenario.
+///    - `z = 1000`: Malla 3D low-poly de la mano y puntero espacial siempre encima de todo.
 final class XRSession: NSObject, ObservableObject {
 
     // MARK: - Estado para SwiftUI
 
     @Published var handCount = 0
-    @Published var status = "Tocá «Monitor PC» para empezar"
+    @Published var handDepthText = "Sin manos"
+    @Published var lidarActive = false
+    @Published var status = "Tocá «Monitor PC» o «Menú 3D» para empezar"
     @Published var localAddress = LocalIP.wifiAddress() ?? "sin Wi-Fi"
     @Published var mouseEnabled = false
     /// 0 = normal (llena), 1 = amplio, 2 = cámara completa (más lejos).
@@ -36,8 +42,6 @@ final class XRSession: NSObject, ObservableObject {
         }
     }
 
-    /// Qué fracción del alto de la cámara se ve en pantalla (más chico = más
-    /// lejos se ve el mundo).
     private var visibleFraction: CGFloat {
         switch framing {
         case 0: return 0.615
@@ -48,36 +52,33 @@ final class XRSession: NSObject, ObservableObject {
 
     // MARK: - Modo VR box
 
-    /// Se muestra la pantalla de ajuste de los marcos antes de la cámara.
     @Published var showsSetup = true
     @Published var stereoEnabled = false {
         didSet { if stereoEnabled != oldValue { applyStereoMode() } }
     }
-    /// Tamaño de cada ojo, separación y altura (se guardan).
     @Published var vrScale: CGFloat = 0.5 { didSet { saveVRSettings() } }
     @Published var vrSeparation: CGFloat = 20 { didSet { saveVRSettings() } }
     @Published var vrVertical: CGFloat = 0 { didSet { saveVRSettings() } }
 
-    // MARK: - Vistas
+    // MARK: - Vistas y Capas de Renderizado
 
-    /// Fondo (llenando, atenuado) para los laterales cuando la cámara no llena.
     let backdrop = CameraSampleView()
     private let dim = UIView()
-    /// Cámara nítida, en el rectángulo que corresponde.
     let camera = CameraSampleView()
     let hostView = WindowHostView()
-    /// Dibuja la mano real **por encima** de las ventanas (efecto de agarre).
     let occlusionView = HandOcclusionView()
+    /// Capa Overlay superior (`zPosition = 1000`): dibuja la malla 3D low-poly de la mano.
     let overlay = HandOverlayView()
 
-    // Dos mitades, una por ojo (VR box).
+    // Dos mitades estereoscópicas, una por ojo (VR box).
     private let leftPane = StereoPane()
     private let rightPane = StereoPane()
     private let stereoRoot = UIView()
 
-    // MARK: - Motor
+    // MARK: - Motores del Pipeline Híbrido
 
     private let arSession = ARSession()
+    private let headTracker = HybridHeadTracker()
     private let tracker = HandTracker()
     private let gestures = GestureEngine()
     private let pointer = PointerController()
@@ -89,9 +90,9 @@ final class XRSession: NSObject, ObservableObject {
     private var arStarted = false
     private var lastPose: CameraPose?
     private var lastHands: [HandPose] = []
-    /// Último frame de cámara (para la oclusión de la mano).
     private var lastBuffer: CVPixelBuffer?
     private weak var monitor: SpatialWindow?
+    private weak var floatingMenu: SpatialWindow?
     private var wasDragging = false
     private var gamepadMoving = false
     private var mapLoaded = false
@@ -106,6 +107,16 @@ final class XRSession: NSObject, ObservableObject {
         backdrop.videoGravity = .resizeAspectFill
         camera.videoGravity = .resize
 
+        // Jerarquía explícita de capas de renderizado:
+        // 0: Fondo/cámara · 100..500: Escenario + Menú Overlay · 1000: Mano 3D Low-Poly Overlay
+        backdrop.layer.zPosition = 0
+        dim.layer.zPosition = 1
+        camera.layer.zPosition = 2
+        hostView.layer.zPosition = 100
+        occlusionView.layer.zPosition = 900
+        occlusionView.isHidden = true
+        overlay.layer.zPosition = 1000
+
         for subview in [backdrop, dim, camera, hostView, occlusionView, overlay] as [UIView] {
             subview.frame = view.bounds
             subview.autoresizingMask = []
@@ -114,18 +125,21 @@ final class XRSession: NSObject, ObservableObject {
 
         hostView.session = self
         overlay.isUserInteractionEnabled = false
-        overlay.showsSkeleton = false
+        overlay.showsSkeleton = true
 
-        // VR box: dos mitades encima de todo.
+        // VR box: dos mitades estereoscópicas encima con sus propias capas Overlay.
         stereoRoot.frame = view.bounds
         stereoRoot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         stereoRoot.backgroundColor = .black
+        stereoRoot.layer.zPosition = 2000
         stereoRoot.isHidden = true
         view.addSubview(stereoRoot)
         stereoRoot.addSubview(leftPane)
         stereoRoot.addSubview(rightPane)
         leftPane.host.session = self
         rightPane.host.session = self
+        leftPane.overlay.showsSkeleton = true
+        rightPane.overlay.showsSkeleton = true
 
         return view
     }()
@@ -143,6 +157,7 @@ final class XRSession: NSObject, ObservableObject {
         guard !isRunning else { return }
         isRunning = true
         localAddress = LocalIP.wifiAddress() ?? localAddress
+        headTracker.start()
         startARKit()
 
         let link = CADisplayLink(target: self, selector: #selector(tick))
@@ -155,6 +170,7 @@ final class XRSession: NSObject, ObservableObject {
         isRunning = false
         displayLink?.invalidate()
         displayLink = nil
+        headTracker.stop()
         arSession.pause()
         arStarted = false
         gestures.reset()
@@ -169,9 +185,20 @@ final class XRSession: NSObject, ObservableObject {
 
         let configuration = ARWorldTrackingConfiguration()
         configuration.worldAlignment = .gravity
-        configuration.planeDetection = [.horizontal]
+        configuration.planeDetection = [.horizontal, .vertical]
         configuration.isLightEstimationEnabled = false
         configuration.environmentTexturing = .none
+
+        // Activar sensor LiDAR (smoothedSceneDepth / sceneDepth) para hand tracking 3D real.
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+            configuration.frameSemantics.insert(.smoothedSceneDepth)
+            lidarActive = true
+        } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            configuration.frameSemantics.insert(.sceneDepth)
+            lidarActive = true
+        } else {
+            lidarActive = false
+        }
 
         if let map = loadWorldMap() {
             configuration.initialWorldMap = map
@@ -183,7 +210,7 @@ final class XRSession: NSObject, ObservableObject {
         arStarted = true
     }
 
-    // MARK: - Monitor de la PC
+    // MARK: - Ventanas de Escenario y Menú Flotante (Overlay UI)
 
     func connectPC() {
         if let monitor, hostView.windows.contains(where: { $0 === monitor }) {
@@ -197,7 +224,79 @@ final class XRSession: NSObject, ObservableObject {
                                   physicalWidth: 0.85)
         monitor = window
         anchor(window)
+        if stereoEnabled { buildMirrorWindows() }
         status = "Esperando al PC en \(localAddress):\(Config.streamPort)"
+    }
+
+    /// Abre o recentra el menú flotante en la capa Overlay UI (`zPosition = 500`),
+    /// manteniéndolo siempre visible por encima de los monitores y escenarios.
+    func toggleFloatingMenu() {
+        if let menu = floatingMenu, hostView.windows.contains(where: { $0 === menu }) {
+            if let anchor = menu.anchor {
+                arSession.remove(anchor: anchor)
+                menu.anchor = nil
+            }
+            hostView.remove(menu)
+            floatingMenu = nil
+            if stereoEnabled { buildMirrorWindows() }
+            status = "Menú flotante oculto"
+            return
+        }
+
+        let pos = positionInFront(distance: Config.menuDistance)
+        let menu = hostView.add(kind: .menu,
+                                position: pos,
+                                physicalWidth: Config.menuWidth)
+        menu.view.layer.zPosition = 500
+        floatingMenu = menu
+        anchor(menu)
+        if stereoEnabled { buildMirrorWindows() }
+        status = "Menú flotante 3D activo (Overlay UI)"
+    }
+
+    func handleMenuAction(_ action: MenuAction) {
+        switch action {
+        case .pc:
+            connectPC()
+        case .youtube:
+            let w = hostView.add(kind: .web(Config.youtubeURL),
+                                 position: positionInFront(distance: Config.windowDistance),
+                                 physicalWidth: Config.windowWidth)
+            anchor(w)
+            if stereoEnabled { buildMirrorWindows() }
+        case .video:
+            let w = hostView.add(kind: .video(Config.sampleVideoURL),
+                                 position: positionInFront(distance: Config.windowDistance),
+                                 physicalWidth: Config.windowWidth)
+            anchor(w)
+            if stereoEnabled { buildMirrorWindows() }
+        case .photos:
+            snapMonitorToSurface()
+        case .web:
+            let w = hostView.add(kind: .web(Config.defaultWebURL),
+                                 position: positionInFront(distance: Config.windowDistance),
+                                 physicalWidth: Config.windowWidth)
+            anchor(w)
+            if stereoEnabled { buildMirrorWindows() }
+        case .control:
+            toggleMouse()
+        case .hands:
+            overlay.showsSkeleton.toggle()
+            leftPane.overlay.showsSkeleton = overlay.showsSkeleton
+            rightPane.overlay.showsSkeleton = overlay.showsSkeleton
+            status = overlay.showsSkeleton ? "Malla 3D de mano activa" : "Malla 3D de mano oculta"
+        case .occlusion:
+            savePlace()
+        case .stereo:
+            stereoEnabled.toggle()
+        case .wide:
+            cycleFraming()
+        case .recenter:
+            headTracker.recenterGyro()
+            centerMonitor()
+        case .clear:
+            closeWindows()
+        }
     }
 
     func closeWindows() {
@@ -209,7 +308,12 @@ final class XRSession: NSObject, ObservableObject {
         }
         hostView.removeAll()
         monitor = nil
-        status = "Monitor cerrado"
+        floatingMenu = nil
+        if stereoEnabled {
+            leftPane.host.removeAll()
+            rightPane.host.removeAll()
+        }
+        status = "Escenario limpio"
     }
 
     func toggleMouse() {
@@ -224,19 +328,24 @@ final class XRSession: NSObject, ObservableObject {
         status = "PC conectado (\(host))"
     }
 
-    /// Sin uso en esta versión (la ventana base lo declara).
     func promptForURL(title: String, message: String, current: URL?, completion: @escaping (URL) -> Void) {}
 
-    /// Cambia cuánto campo de visión se ve (zoom out por software).
     func cycleFraming() {
         framing = (framing + 1) % 3
     }
 
     func centerMonitor() {
-        guard let monitor else { return }
-        hostView.setPosition(monitor, positionInFront(distance: 1.6), force: true)
-        monitor.smoothedCenter = nil
-        reanchor(monitor)
+        headTracker.recenterGyro()
+        if let monitor {
+            hostView.setPosition(monitor, positionInFront(distance: 1.6), force: true)
+            monitor.smoothedCenter = nil
+            reanchor(monitor)
+        }
+        if let menu = floatingMenu {
+            hostView.setPosition(menu, positionInFront(distance: Config.menuDistance), force: true)
+            menu.smoothedCenter = nil
+            reanchor(menu)
+        }
     }
 
     /// Escanea la mesa y fija el monitor ahí: coordenadas reales del plano.
@@ -290,7 +399,6 @@ final class XRSession: NSObject, ObservableObject {
         return try? NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data)
     }
 
-    /// Guarda el mapa del lugar **y** dónde quedó el monitor.
     func savePlace() {
         guard let monitor else {
             status = "Primero abrí el monitor (Monitor PC)"
@@ -354,10 +462,11 @@ final class XRSession: NSObject, ObservableObject {
         window.normal = simd_length(normal) > 0.1 ? normal : window.normal
         monitor = window
         anchor(window)
+        if stereoEnabled { buildMirrorWindows() }
         status = "Monitor restaurado del lugar guardado"
     }
 
-    // MARK: - Anclajes
+    // MARK: - Anclajes 6DoF
 
     private func anchor(_ window: SpatialWindow) {
         guard window.anchor == nil else { return }
@@ -389,7 +498,7 @@ final class XRSession: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Frames
+    // MARK: - Loop Principal Sincronizado (60 Hz)
 
     @objc private func tick() {
         guard isRunning else { return }
@@ -402,12 +511,11 @@ final class XRSession: NSObject, ObservableObject {
                                height: CVPixelBufferGetHeight(frame.capturedImage))
         let aspect = ScreenOrientation.displayAspect(raw: imageSize, orientation: orientation)
 
-        // Rectángulo de la cámara: con "ver más" se agranda y se ven más grados.
         let rect = Self.cameraRect(aspect: aspect, screen: screen, fraction: visibleFraction)
 
         camera.frame = rect
         occlusionView.frame = rect
-        occlusionView.isHidden = stereoEnabled
+        occlusionView.isHidden = true
         hostView.bounds = CGRect(origin: .zero, size: rect.size)
         hostView.center = CGPoint(x: rect.midX, y: rect.midY)
         overlay.bounds = hostView.bounds
@@ -416,18 +524,21 @@ final class XRSession: NSObject, ObservableObject {
         camera.enqueue(frame.capturedImage)
         backdrop.enqueue(frame.capturedImage)
         lastBuffer = frame.capturedImage
-        let pose = CameraPose(arkitCamera: frame.camera,
-                              orientation: orientation,
-                              viewport: rect.size,
-                              imageSize: imageSize)
+
+        // 1. Pose híbrida: ARKit 6DoF + Giroscopio CoreMotion de baja latencia.
+        let pose = headTracker.fusedPose(from: frame,
+                                         orientation: orientation,
+                                         viewport: rect.size,
+                                         imageSize: imageSize)
         lastPose = pose
 
-        // Si había un lugar guardado y ya re-localizó, aparece el monitor solo.
         if mapLoaded, !restoredMonitor, case .normal = frame.camera.trackingState {
             restoredMonitor = true
             restoreSavedMonitor()
         }
 
+        // 2. Renderizar la malla 3D low-poly de la mano en la capa Overlay superior
+        //    y proyectar las ventanas 3D y menús flotantes.
         overlay.render(poses: lastHands)
         hostView.layout(pose: pose)
         if stereoEnabled {
@@ -435,7 +546,15 @@ final class XRSession: NSObject, ObservableObject {
         }
         updateGamepad(pose: pose)
 
+        // 3. Pipeline asíncrono de mano: Apple Vision (21 puntos) + Sensor LiDAR + Filtro 1€.
+        let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth
+        let depthMap = depthData?.depthMap
+        let confidenceMap = depthData?.confidenceMap
+
         tracker.submit(pixelBuffer: frame.capturedImage,
+                       depthMap: depthMap,
+                       confidenceMap: confidenceMap,
+                       pose: pose,
                        viewportSize: rect.size,
                        imageAspect: aspect,
                        orientation: ScreenOrientation.visionOrientation(for: orientation)) { [weak self] poses in
@@ -459,36 +578,44 @@ final class XRSession: NSObject, ObservableObject {
         lastHands = poses
         if handCount != poses.count { handCount = poses.count }
 
-        // La mano real se dibuja encima de las ventanas: así "agarra" de verdad.
-        if poses.isEmpty {
-            occlusionView.clear()
-        } else {
-            occlusionView.update(buffer: lastBuffer,
-                                 hands: poses,
-                                 orientation: ScreenOrientation.current)
+        if let first = poses.first {
+            let tag = first.hasLiDAR ? "LiDAR" : "3D"
+            let text = String(format: "%@ %.2f m · 1€", tag, first.depthMeters)
+            if handDepthText != text { handDepthText = text }
+            if lidarActive != first.hasLiDAR && first.hasLiDAR { lidarActive = true }
+        } else if handDepthText != "Sin manos" {
+            handDepthText = "Sin manos"
         }
 
         hostView.allowsPositionWrites = true
 
         if mouseEnabled {
-            overlay.setPointer(pointer.update(poses: poses, viewport: hostView.bounds.size))
+            let ptr = pointer.update(poses: poses, viewport: hostView.bounds.size)
+            overlay.setPointer(ptr)
+            leftPane.overlay.setPointer(ptr)
+            rightPane.overlay.setPointer(ptr)
             return
         }
 
         gestures.update(poses: poses, host: hostView, pose: pose)
 
-        if wasDragging, !gestures.isDragging, let monitor {
-            reanchor(monitor)
+        if wasDragging, !gestures.isDragging {
+            for w in hostView.windows { reanchor(w) }
         }
         wasDragging = gestures.isDragging
 
         syncAnchors(dragging: gestures.isDragging || gamepadMoving)
 
-        if let tip = poses.first.map({ $0.pinchPoint }),
-           hostView.window(near: tip) != nil {
-            overlay.setPointer(tip)
+        if let hand = poses.first {
+            let probe = hand.joints[.indexTip] ?? hand.pinchPoint
+            let activePoint = hostView.window(near: probe) != nil ? hand.pinchPoint : nil
+            overlay.setPointer(activePoint)
+            leftPane.overlay.setPointer(activePoint)
+            rightPane.overlay.setPointer(activePoint)
         } else {
             overlay.setPointer(nil)
+            leftPane.overlay.setPointer(nil)
+            rightPane.overlay.setPointer(nil)
         }
     }
 
@@ -521,7 +648,7 @@ final class XRSession: NSObject, ObservableObject {
         gamepadMoving = true
     }
 
-    // MARK: - Modo VR box (dos mitades)
+    // MARK: - Modo VR Box Estereoscópico (Dos Ojos con Disparidad 3D)
 
     private func applyStereoMode() {
         stereoRoot.isHidden = !stereoEnabled
@@ -542,9 +669,11 @@ final class XRSession: NSObject, ObservableObject {
         rightPane.host.removeAll()
         for window in hostView.windows {
             for pane in [leftPane, rightPane] {
-                _ = pane.host.add(kind: window.kind,
-                                  position: window.position,
-                                  physicalWidth: window.physicalWidth)
+                let copy = pane.host.add(kind: window.kind,
+                                         position: window.position,
+                                         physicalWidth: window.physicalWidth)
+                copy.normal = window.normal
+                copy.view.layer.zPosition = window.view.layer.zPosition
             }
         }
     }
@@ -559,14 +688,16 @@ final class XRSession: NSObject, ObservableObject {
             for (source, mirror) in zip(sources, pane.host.windows) {
                 mirror.position = source.position
                 mirror.physicalWidth = source.physicalWidth
+                mirror.normal = source.normal
                 mirror.pinned = source.pinned
                 mirror.view.isHidden = source.view.isHidden
+                mirror.view.layer.zPosition = source.view.layer.zPosition
             }
         }
     }
 
-    /// Dibuja la escena en las dos mitades. `cameraSize` es el rectángulo que
-    /// ocupa la cámara, así el zoom elegido se respeta en el visor.
+    /// Renderiza ambos ojos con disparidad estereoscópica real (`±IPD/2 = ±32 mm`)
+    /// tanto para las ventanas/menús como para la malla 3D low-poly de la mano.
     private func updateStereoPanes(pose: CameraPose, buffer: CVPixelBuffer, cameraSize: CGSize) {
         let size = containerView.bounds.size
         guard size.width > 10, size.height > 10 else { return }
@@ -584,10 +715,18 @@ final class XRSession: NSObject, ObservableObject {
         rightPane.background.enqueue(buffer)
 
         syncMirrorWindows()
-        leftPane.host.layout(pose: pose)
-        rightPane.host.layout(pose: pose)
-        leftPane.render(poses: lastHands)
-        rightPane.render(poses: lastHands)
+
+        // Poses estereoscópicas de ojo izquierdo y derecho (IPD = 64 mm -> ±0.032 m).
+        let leftEyePose = pose.eyePose(horizontalOffsetMeters: -0.032)
+        let rightEyePose = pose.eyePose(horizontalOffsetMeters: 0.032)
+
+        leftPane.host.layout(pose: leftEyePose)
+        rightPane.host.layout(pose: rightEyePose)
+
+        let leftHands = lastHands.map { $0.projected(for: leftEyePose) }
+        let rightHands = lastHands.map { $0.projected(for: rightEyePose) }
+        leftPane.render(poses: leftHands)
+        rightPane.render(poses: rightHands)
     }
 
     // MARK: - Ajustes VR
@@ -616,13 +755,11 @@ final class XRSession: NSObject, ObservableObject {
         }
     }
 
-    /// Pasa de la pantalla de ajuste a la cámara.
     func startCamera() {
         showsSetup = false
         start()
     }
 
-    /// Vuelve al ajuste de los marcos.
     func openSetup() {
         showsSetup = true
     }

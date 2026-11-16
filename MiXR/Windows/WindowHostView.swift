@@ -54,6 +54,20 @@ final class WindowHostView: UIView {
         let content = kind.makeContent()
         view.setContent(content)
 
+        // Capas de renderizado: los menús flotantes viven en la capa Overlay UI (z = 500)
+        // siempre visibles por encima de los escenarios y monitores (z = 100).
+        if case .menu = kind {
+            view.layer.zPosition = 500
+        } else {
+            view.layer.zPosition = 100
+        }
+
+        if let menu = content as? MenuContentView {
+            menu.onAction = { [weak self] action in
+                self?.session?.handleMenuAction(action)
+            }
+        }
+
         if let stream = content as? StreamContentView {
             stream.onVideoSize = { [weak self, weak window] size in
                 guard let self, let window, size.height > 0 else { return }
