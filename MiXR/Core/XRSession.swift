@@ -71,6 +71,8 @@ final class XRSession: NSObject, ObservableObject {
     /// Mano fantasma: recorte real de la cámara, translúcido, encima de las ventanas.
     let ghostView = HandGhostView()
     let overlay = HandOverlayView()
+    /// Viñeta sobre el passthrough: da profundidad al mundo real.
+    private let vignette = VignetteView()
 
     private let leftPane = StereoPane()
     private let rightPane = StereoPane()
@@ -154,11 +156,12 @@ final class XRSession: NSObject, ObservableObject {
         backdrop.layer.zPosition = 0
         dim.layer.zPosition = 1
         camera.layer.zPosition = 2
+        vignette.layer.zPosition = 50
         hostView.layer.zPosition = 100
         ghostView.layer.zPosition = 900
         overlay.layer.zPosition = 1000
 
-        for subview in [backdrop, dim, camera, hostView, ghostView, overlay] as [UIView] {
+        for subview in [backdrop, dim, camera, vignette, hostView, ghostView, overlay] as [UIView] {
             subview.frame = view.bounds
             subview.autoresizingMask = []
             view.addSubview(subview)
@@ -698,6 +701,7 @@ final class XRSession: NSObject, ObservableObject {
 
         camera.frame = rect
         ghostView.frame = rect
+        vignette.frame = rect
         hostView.bounds = CGRect(origin: .zero, size: rect.size)
         hostView.center = CGPoint(x: rect.midX, y: rect.midY)
         overlay.bounds = hostView.bounds
@@ -974,7 +978,7 @@ final class XRSession: NSObject, ObservableObject {
 
     private func applyStereoMode() {
         stereoRoot.isHidden = !stereoEnabled
-        for view in [backdrop, dim, camera, hostView, ghostView, overlay] as [UIView] {
+        for view in [backdrop, dim, camera, vignette, hostView, ghostView, overlay] as [UIView] {
             view.isHidden = stereoEnabled
         }
 

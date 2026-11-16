@@ -250,7 +250,19 @@ final class WindowHostView: UIView {
         }
 
         // Al rodearla se ve el dorso, como la parte de atrás de un monitor.
-        window.view.setShowingBack(facingSign(window: window, pose: pose) < 0)
+        let facing = facingSign(window: window, pose: pose)
+        window.view.setShowingBack(facing < 0)
+
+        // Iluminación del cristal según desde dónde la mirás.
+        let cameraPosition = simd_float3(pose.transform.columns.3.x,
+                                         pose.transform.columns.3.y,
+                                         pose.transform.columns.3.z)
+        let delta = cameraPosition - window.position
+        let lateral = simd_dot(delta, right) / max(simd_length(delta), 0.01)
+        let vertical = simd_dot(delta, up) / max(simd_length(delta), 0.01)
+        window.view.updateLighting(facing: facing,
+                                   lateral: CGFloat(lateral),
+                                   vertical: CGFloat(vertical))
 
         let base = window.view.baseSize
         guard base.width > 1, base.height > 1 else { return }

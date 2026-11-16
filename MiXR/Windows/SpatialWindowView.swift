@@ -24,6 +24,8 @@ final class SpatialWindowView: UIView {
     private let card = UIView()
     /// Dorso del panel: lo que se ve al rodearlo, como la parte de atrás de un monitor.
     private let backPlate = UIView()
+    /// Reflejo del cristal: se mueve con el ángulo desde el que mirás.
+    private let sheen = CAGradientLayer()
     private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
     private let header = UIView()
     private let titleLabel = UILabel()
@@ -110,6 +112,18 @@ final class SpatialWindowView: UIView {
         card.layer.shadowOffset = CGSize(width: 0, height: 10)
         addSubview(card)
 
+        // Reflejo del cristal por encima del contenido.
+        sheen.colors = [
+            UIColor(white: 1.0, alpha: 0.13).cgColor,
+            UIColor(white: 1.0, alpha: 0.03).cgColor,
+            UIColor(white: 1.0, alpha: 0.0).cgColor
+        ]
+        sheen.locations = [0.0, 0.45, 1.0]
+        sheen.startPoint = CGPoint(x: 0.15, y: 0.0)
+        sheen.endPoint = CGPoint(x: 0.85, y: 1.0)
+        sheen.cornerRadius = 22
+        card.layer.addSublayer(sheen)
+
         blur.frame = card.bounds
         blur.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         card.addSubview(blur)
@@ -163,7 +177,6 @@ final class SpatialWindowView: UIView {
     }
 
     // MARK: - Dorso (para rodear el panel)
-
     /// Muestra la parte de atrás cuando la cámara pasa por detrás del panel.
     func setShowingBack(_ showing: Bool) {
         guard showingBack != showing else { return }
@@ -172,6 +185,29 @@ final class SpatialWindowView: UIView {
         backPlate.isHidden = !showing
         card.isHidden = showing
         grabBar.isHidden = showing
+    }
+
+    /// Iluminación según el ángulo de visión: el reflejo se corre al lado opuesto y el
+    /// borde se enciende de costado. Es lo que hace que se lea como una pantalla de vidrio.
+    func updateLighting(facing: Float, lateral: CGFloat, vertical: CGFloat) {
+        let forward = CGFloat(max(0, min(1, facing)))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        let sx = 0.5 - lateral * 0.42
+        let sy = 0.5 - vertical * 0.42
+        sheen.startPoint = CGPoint(x: min(max(sx + 0.34, -0.2), 1.2),
+                                   y: min(max(sy - 0.34, -0.2), 1.2))
+        sheen.endPoint = CGPoint(x: min(max(sx - 0.34, -0.2), 1.2),
+                                 y: min(max(sy + 0.34, -0.2), 1.2))
+        sheen.opacity = Float(0.25 + 0.75 * Double(forward))
+
+        // Borde: más brillante cuando se mira de costado, más tenue de frente.
+        let rim = 0.10 + 0.45 * Double(1.0 - forward)
+        card.layer.borderColor = UIColor.white.withAlphaComponent(rim).cgColor
+        card.layer.borderWidth = 1.0 + (1.0 - forward) * 0.8
+
+        CATransaction.commit()
     }
 
     private var showingBack = false
@@ -226,6 +262,7 @@ final class SpatialWindowView: UIView {
         card.frame = bounds
         backPlate.frame = bounds
         backPlate.layer.cornerRadius = 22
+        sheen.frame = card.bounds
         header.frame = CGRect(x: 0, y: 0, width: bounds.width, height: Self.headerHeight)
         contentContainer.frame = CGRect(x: 0, y: Self.headerHeight,
                                         width: bounds.width,
